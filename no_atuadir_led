@@ -1,0 +1,107 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
+
+// ---------- Configurações Wi-Fi ----------
+const char* ssid = "taques";
+const char* password = "ABCDEFGH";
+
+// ---------- Configurações MQTT ----------
+const char* mqtt_server = "broker.hivemq.com";
+const int   mqtt_port   = 1883;
+const char* mqtt_client_id = "esp32-atuador-fnd-3092"; // único, diferente do sensor
+
+// Prefixo dos tópicos — deve bater EXATAMENTE com o do nó sensor
+const char* topico_sub = "garagem/vaga/#";
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+// ---------- Definição das vagas ----------
+// Cada vaga tem um par de LEDs: verde (livre) e vermelho (ocupada)
+struct Vaga {
+  int ledVerde;
+  int ledVermelho;
+};
+
+Vaga vagas[] = {
+  {22, 23},   // Vaga 1
+};
+
+const int NUM_VAGAS = sizeof(vagas) / sizeof(vagas[0]);
+
+// ---------- Aplica o estado nos LEDs de uma vaga ----------
+void aplicarEstado(int indice, bool ocupada) {
+  if (indice < 0 || indice >= NUM_VAGAS) return;
+  digitalWrite(vagas[indice].ledVerde,    ocupada ? LOW  : HIGH);
+  digitalWrite(vagas[indice].ledVermelho, ocupada ? HIGH : LOW);
+}
+
+// ---------- Callback: chamado a cada mensagem recebida ----------
+void callback(char* topic, byte* payload, unsigned int length) {
+  // Monta a mensagem como string
+  char msg[16];
+  unsigned int n = length < sizeof(msg) - 1 ? length : sizeof(msg) - 1;
+  memcpy(msg, payload, n);
+  msg[n] = '\0';
+
+  // Extrai o número da vaga do fim do tópico (ex.: "fnd/garagem/vaga/2" -> 2)
+  String t = String(topic);
+  int barra = t.lastIndexOf('/');
+  int numVaga = t.substring(barra + 1).toInt(); // 1, 2, 3...
+
+  if (numVaga < 1 || numVaga > NUM_VAGAS) return;
+
+  bool ocupada = (strcmp(msg, "ocupada") == 0);
+  aplicarEstado(numVaga - 1, ocupada);
+
+  Serial.printf("Vaga %d -> %s\n", numVaga, ocupada ? "OCUPADA (vermelho)" : "LIVRE (verde)");
+}
+
+// ---------- Conexão Wi-Fi ----------
+void conectarWiFi() {
+  WiFi.begin(ssid, password);
+  Serial.print("Conectando ao Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWi-Fi conectado. IP: " + WiFi.localIP().toString());
+}
+
+// ---------- Reconexão MQTT ----------
+void conectarMQTT() {
+  while (!client.connected()) {
+    Serial.print("Conectando ao broker MQTT...");
+    if (client.connect(mqtt_client_id)) {
+      Serial.println("conectado.");
+      // Assina os tópicos das vagas ao (re)conectar
+      client.subscribe(topico_sub);
+      Serial.printf("Assinado: %s\n", topico_sub);
+    } else {
+      Serial.print("falhou, rc=");
+      Serial.print(client.state());
+      Serial.println(" tentando de novo em 2s");
+      delay(2000);
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  // Configura os pinos dos LEDs e inicia todas as vagas como "livre"
+  for (int i = 0; i < NUM_VAGAS; i++) {
+    pinMode(vagas[i].ledVerde, OUTPUT);
+    pinMode(vagas[i].ledVermelho, OUTPUT);
+    aplicarEstado(i, false); // verde aceso
+  }
+
+  conectarWiFi();
+  client.setServer(mqtt_server, mqtt_port);
+  client.setCallback(callback);
+}
+
+void loop() {
+  if (!client.connected()) conectarMQTT();
+  client.loop();
+}
