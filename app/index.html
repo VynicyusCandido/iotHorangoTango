@@ -17,6 +17,7 @@
     --ocupada: #dc2626;
     --ocupada-bg: #fdecec;
     --aviso: #d97706;
+    --semdados-bg: #eceef2;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -30,6 +31,7 @@
       --ocupada: #f87171;
       --ocupada-bg: #2f1617;
       --aviso: #fbbf24;
+      --semdados-bg: #232934;
     }
   }
   * { box-sizing: border-box; }
@@ -70,9 +72,11 @@
     background: var(--livre-bg);
   }
   .vaga.ocupada { border-color: var(--ocupada); background: var(--ocupada-bg); }
+  .vaga.semdados { border-color: var(--muted); border-style: dashed; background: var(--semdados-bg); }
   .vaga .nome { font-weight: 600; }
   .vaga .estado { font-size: 1.1rem; font-weight: 700; color: var(--livre); margin: 4px 0; }
   .vaga.ocupada .estado { color: var(--ocupada); }
+  .vaga.semdados .estado { color: var(--muted); }
   .vaga .hora { font-size: .75rem; color: var(--muted); }
 
   .vazio { color: var(--muted); text-align: center; padding: 32px 8px; }
@@ -133,8 +137,8 @@
     <label>Broker (WebSocket)
       <input type="text" id="cfgBroker" placeholder="wss://broker.hivemq.com:8884/mqtt">
     </label>
-    <label>Prefixo do tópico (igual ao dos sketches)
-      <input type="text" id="cfgPrefixo" placeholder="garagem/vaga">
+    <label>Tópico base (igual ao dos sketches)
+      <input type="text" id="cfgBase" placeholder="garagem">
     </label>
     <button id="btnSalvar">Salvar e reconectar</button>
   </details>
@@ -143,21 +147,27 @@
 <script>
   const PADRAO = {
     broker: "wss://broker.hivemq.com:8884/mqtt",
-    prefixo: "garagem/vaga",
+    base: "garagem",
   };
 
-  // Configuração: parâmetros da URL (?broker=...&prefixo=...) > localStorage > padrão
+  // Tópicos (iguais aos do nó sensor):
+  //   <base>/vaga/<numero>    -> "livre" / "ocupada"
+  //   <base>/no/<id>/status   -> "online" / "offline" (Last Will do sensor)
+  //   <base>/no/<id>/vagas    -> vagas monitoradas pelo nó, ex.: "1,2,3"
+
+  // Configuração: parâmetros da URL (?broker=...&base=...) > localStorage > padrão
   function lerConfig() {
     let salvo = {};
     try { salvo = JSON.parse(localStorage.getItem("vagas-config") || "{}"); } catch (e) {}
     const url = new URLSearchParams(location.search);
     return {
       broker: url.get("broker") || salvo.broker || PADRAO.broker,
-      prefixo: (url.get("prefixo") || salvo.prefixo || PADRAO.prefixo).replace(/\/+$/, ""),
+      base: (url.get("base") || salvo.base || PADRAO.base).replace(/\/+$/, ""),
     };
   }
 
   const vagas = new Map(); // número da vaga -> { ocupada, hora }
+  const nos = new Map();   // id do nó sensor -> { online, vagas: Set<número> }
   let cliente = null;
   let config = lerConfig();
 
@@ -168,24 +178,41 @@
     el("status").className = "status " + (classe || "");
   }
 
+  // Vaga sem dados: todos os nós que a monitoram estão offline.
+  // Vagas que nenhum nó declara (firmware antigo) são tratadas como válidas.
+  function semDados(numero) {
+    const donos = [...nos.values()].filter((no) => no.vagas.has(numero));
+    return donos.length > 0 && donos.every((no) => !no.online);
+  }
+
   function render() {
     const soLivres = el("soLivres").checked;
-    const lista = [...vagas.entries()].sort((a, b) => a[0] - b[0]);
-    const livres = lista.filter(([, v]) => !v.ocupada).length;
+    const lista = [...vagas.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([n, v]) => ({ n, ...v, semDados: semDados(n) }));
+    const comDados = lista.filter((v) => !v.semDados);
+    const livres = comDados.filter((v) => !v.ocupada).length;
+    const qtdSemDados = lista.length - comDados.length;
 
     el("numLivres").textContent = lista.length ? livres : "–";
     el("numLivres").classList.toggle("zero", lista.length > 0 && livres === 0);
     el("txtResumo").textContent = lista.length
       ? (livres === 1 ? "vaga livre" : "vagas livres") + ` de ${lista.length}`
+        + (qtdSemDados ? ` · ${qtdSemDados} sem dados` : "")
       : "aguardando dados do broker";
 
-    const visiveis = lista.filter(([, v]) => !soLivres || !v.ocupada);
-    el("grade").innerHTML = visiveis.map(([n, v]) => `
-      <div class="vaga ${v.ocupada ? "ocupada" : ""}">
-        <div class="nome">Vaga ${n}</div>
-        <div class="estado">${v.ocupada ? "Ocupada" : "Livre"}</div>
-        <div class="hora">atualizado ${v.hora.toLocaleTimeString("pt-BR")}</div>
-      </div>`).join("");
+    const visiveis = lista.filter((v) => !soLivres || (!v.ocupada && !v.semDados));
+    el("grade").innerHTML = visiveis.map((v) => {
+      const classe = v.semDados ? "semdados" : v.ocupada ? "ocupada" : "";
+      const estado = v.semDados ? "Sem dados" : v.ocupada ? "Ocupada" : "Livre";
+      const hora = v.semDados ? "sensor offline" : `atualizado ${v.hora.toLocaleTimeString("pt-BR")}`;
+      return `
+      <div class="vaga ${classe}">
+        <div class="nome">Vaga ${v.n}</div>
+        <div class="estado">${estado}</div>
+        <div class="hora">${hora}</div>
+      </div>`;
+    }).join("");
 
     el("vazio").style.display = visiveis.length ? "none" : "block";
     el("vazio").textContent = lista.length ? "Nenhuma vaga livre no momento." : "Nenhuma vaga recebida ainda.";
@@ -194,10 +221,12 @@
   function conectar() {
     if (cliente) cliente.end(true);
     vagas.clear();
+    nos.clear();
     render();
     setStatus("conectando…");
 
-    const topico = config.prefixo + "/#";
+    const prefixoVaga = config.base + "/vaga/";
+    const prefixoNo = config.base + "/no/";
     cliente = mqtt.connect(config.broker, {
       clientId: "app-vagas-" + Math.random().toString(16).slice(2, 10),
       reconnectPeriod: 3000,
@@ -205,18 +234,25 @@
 
     cliente.on("connect", () => {
       setStatus("online", "on");
-      cliente.subscribe(topico); // retained: já recebe o último estado de cada vaga
+      // retained: já recebe o último estado de cada vaga e de cada nó
+      cliente.subscribe([prefixoVaga + "#", prefixoNo + "#"]);
     });
     cliente.on("reconnect", () => setStatus("reconectando…"));
     cliente.on("offline", () => setStatus("offline", "off"));
     cliente.on("error", (err) => { console.error(err); setStatus("erro", "off"); });
 
     cliente.on("message", (t, payload) => {
-      // Tópico esperado: <prefixo>/<número>
-      const numero = parseInt(t.slice(config.prefixo.length + 1), 10);
+      const msg = payload.toString().trim().toLowerCase();
+      if (t.startsWith(prefixoNo)) {
+        atualizarNo(t.slice(prefixoNo.length), msg);
+        render();
+        return;
+      }
+      if (!t.startsWith(prefixoVaga)) return;
+
+      const numero = Number(t.slice(prefixoVaga.length));
       if (!Number.isInteger(numero) || numero < 1) return;
 
-      const msg = payload.toString().trim().toLowerCase();
       if (msg === "") {
         vagas.delete(numero); // retained apagado: vaga removida
       } else if (msg === "livre" || msg === "ocupada") {
@@ -228,14 +264,33 @@
     });
   }
 
+  // resto = "<id>/status" ou "<id>/vagas"
+  function atualizarNo(resto, msg) {
+    const [id, campo] = resto.split("/");
+    if (!id) return;
+    if (campo === "status" && msg === "") {
+      nos.delete(id); // retained apagado: nó removido
+      return;
+    }
+    const no = nos.get(id) || { online: true, vagas: new Set() };
+    if (campo === "status") {
+      no.online = msg !== "offline";
+    } else if (campo === "vagas") {
+      no.vagas = new Set(msg.split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0));
+    } else {
+      return;
+    }
+    nos.set(id, no);
+  }
+
   el("soLivres").addEventListener("change", render);
 
   el("cfgBroker").value = config.broker;
-  el("cfgPrefixo").value = config.prefixo;
+  el("cfgBase").value = config.base;
   el("btnSalvar").addEventListener("click", () => {
     const novo = {
       broker: el("cfgBroker").value.trim() || PADRAO.broker,
-      prefixo: (el("cfgPrefixo").value.trim() || PADRAO.prefixo).replace(/\/+$/, ""),
+      base: (el("cfgBase").value.trim() || PADRAO.base).replace(/\/+$/, ""),
     };
     try { localStorage.setItem("vagas-config", JSON.stringify(novo)); } catch (e) {}
     config = novo;
