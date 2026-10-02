@@ -306,6 +306,35 @@ Para rodar de novo no Wokwi, reverta o `mqtt_server` para
 `broker.hivemq.com` e o Wi-Fi para `Wokwi-GUEST` (senha vazia) nos dois
 sketches.
 
+## App de vagas livres
+
+O diretório `app/` contém um app web (um único `index.html`, sem build)
+que mostra em tempo real quais vagas estão livres. Ele se conecta ao
+broker via MQTT sobre WebSocket, assina `garagem/vaga/#` e, graças ao
+flag *retained*, já exibe o último estado de cada vaga ao abrir.
+
+**Como abrir**
+
+- Abra `app/index.html` direto no navegador (funciona no celular), ou
+  sirva a pasta: `python3 -m http.server -d app 8080` e acesse
+  `http://<IP-do-PC>:8080` de qualquer aparelho da rede.
+- Por padrão conecta em `wss://broker.hivemq.com:8884/mqtt`.
+
+**Configuração**
+
+Em **Configurações** (no rodapé do app) dá para trocar o broker e o
+prefixo do tópico; os valores ficam salvos no navegador. Também é
+possível passar pela URL:
+
+```
+index.html?broker=ws://192.168.1.100:9001&prefixo=garagem/vaga
+```
+
+**Com Mosquitto local:** o `mosquitto.conf` já abre um listener
+WebSocket na porta **9001** (libere-a no firewall também). Use
+`ws://<IP-do-PC>:9001` como broker no app. Se a página for servida por
+`https`, o navegador exige `wss://`.
+
 ## Simulação no Wokwi
 
 O projeto pode ser executado sem hardware físico no simulador
@@ -323,6 +352,7 @@ O projeto pode ser executado sem hardware físico no simulador
 
 ```
 .
+├── app/                # App web de vagas livres (MQTT via WebSocket)
 ├── docs/               # Documentação, diagramas e especificações do projeto
 ├── src/
 │   ├── sensor/         # Sketch do nó sensor (publisher)
@@ -335,5 +365,5 @@ O projeto pode ser executado sem hardware físico no simulador
 
 - [x] Indicadores visuais (LEDs verde/vermelho) por vaga como atuadores
       locais
-- [ ] Aplicativo para os motoristas consultarem as vagas disponíveis
+- [x] Aplicativo para os motoristas consultarem as vagas disponíveis
 - [ ] Painel de monitoramento consolidado da garagem
