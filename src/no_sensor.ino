@@ -22,15 +22,18 @@ WiFiClient espClient;
 PubSubClient client(espClient);
 
 // ---------- Definição das vagas ----------
-// Cada vaga: {trigPin, echoPin}
+// Cada vaga: {trigPin, echoPin, ocupada, pendente}
+// pendente = estado ainda não publicado no broker (no boot, após
+// reconexão ou se o publish falhar)
 struct Vaga {
   int trig;
   int echo;
   bool ocupada;
+  bool pendente;
 };
 
 Vaga vagas[] = {
-  {5, 18, false},
+  {5, 18, false, true},
 };
 const int NUM_VAGAS = sizeof(vagas) / sizeof(vagas[0]);
 
@@ -73,6 +76,9 @@ void conectarMQTT() {
     Serial.print("Conectando ao broker MQTT...");
     if (client.connect(mqtt_client_id)) {
       Serial.println("conectado.");
+      // Republica o estado de todas as vagas: mudanças ocorridas enquanto
+      // estava desconectado não chegaram ao broker
+      for (int i = 0; i < NUM_VAGAS; i++) vagas[i].pendente = true;
     } else {
       Serial.print("falhou, rc=");
       Serial.print(client.state());
@@ -107,14 +113,16 @@ void loop() {
       bool ocupadaAgora = (dist > 0 && dist < LIMIAR_CM);
 
       // Publica só quando o estado muda (evita tráfego desnecessário)
-      if (ocupadaAgora != vagas[i].ocupada) {
+      // ou quando há estado pendente (boot / reconexão / falha anterior)
+      if (ocupadaAgora != vagas[i].ocupada || vagas[i].pendente) {
         vagas[i].ocupada = ocupadaAgora;
 
         char topico[32];
         snprintf(topico, sizeof(topico), "garagem/vaga/%d", i + 1);
         const char* estado = ocupadaAgora ? "ocupada" : "livre";
 
-        client.publish(topico, estado, true); // retained
+        // retained; se falhar, tenta de novo na próxima leitura
+        vagas[i].pendente = !client.publish(topico, estado, true);
         Serial.printf("Vaga %d: %s (%.1f cm)\n", i + 1, estado, dist);
       }
     }
