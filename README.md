@@ -53,6 +53,12 @@ broker MQTT, sem se conhecerem diretamente:
 7. **Acionamento dos LEDs** — para cada mensagem, extrai o número da
    vaga do tópico e acende o LED verde (livre) ou vermelho (ocupada)
    correspondente.
+8. **Sensor offline** — o atuador também assina `garagem/no/#`. Se
+   todos os nós sensores que monitoram uma vaga ficam `offline`, os dois
+   LEDs dessa vaga são **apagados** (estado desconhecido), em vez de
+   continuar mostrando um estado que pode estar errado. Eles voltam a
+   acender quando o sensor reconecta. Ao ligar, o atuador mantém os
+   LEDs apagados até receber o estado da vaga.
 
 Outros assinantes (aplicativo dos motoristas, painel de monitoramento)
 podem consumir os mesmos tópicos em paralelo. Durante os testes, todas
@@ -339,8 +345,9 @@ index.html?broker=ws://192.168.1.100:9001&base=garagem
 
 **Vagas sem dados:** se um nó sensor perde a conexão, o broker publica
 `offline` no status dele (Last Will) e as vagas desse nó aparecem em
-cinza como "Sem dados", fora da contagem de livres. O broker detecta a
-queda pelo *keepalive* do MQTT, o que leva cerca de 20 segundos.
+cinza como "Sem dados", fora da contagem de livres. Os LEDs dessas vagas
+no atuador apagam ao mesmo tempo. O broker detecta a queda pelo
+*keepalive* do MQTT, o que leva cerca de 20 segundos.
 
 **Com Mosquitto local:** o `mosquitto.conf` já abre um listener
 WebSocket na porta **9001** (libere-a no firewall também). Use
