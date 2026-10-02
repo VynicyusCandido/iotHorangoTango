@@ -8,26 +8,39 @@ const char* password = "ABCDEFGH";
 // ---------- Configurações MQTT ----------
 const char* mqtt_server = "broker.hivemq.com";
 const int   mqtt_port   = 1883;
-const char* mqtt_client_id = "esp32-atuador-fnd-3092"; // único, diferente do sensor
 
 // Prefixo dos tópicos — deve bater EXATAMENTE com o do nó sensor
 const char* topico_sub = "garagem/vaga/#";
+
+// Client ID gerado a partir do MAC em setup() — único por placa
+char mqtt_client_id[32]; // "esp32-atuador-<mac>"
 
 WiFiClient espClient;
 PubSubClient client(espClient);
 
 // ---------- Definição das vagas ----------
-// Cada vaga tem um par de LEDs: verde (livre) e vermelho (ocupada)
+// Cada vaga: {numero, ledVerde, ledVermelho}
+// numero = número da vaga na garagem (o mesmo configurado no nó sensor);
+//          a ordem no array não importa
 struct Vaga {
+  int numero;
   int ledVerde;
   int ledVermelho;
 };
 
 Vaga vagas[] = {
-  {22, 23},   // Vaga 1
+  {1, 22, 23},
 };
 
 const int NUM_VAGAS = sizeof(vagas) / sizeof(vagas[0]);
+
+// ---------- Procura a vaga pelo número (-1 se não for deste atuador) ----------
+int indiceDaVaga(int numero) {
+  for (int i = 0; i < NUM_VAGAS; i++) {
+    if (vagas[i].numero == numero) return i;
+  }
+  return -1;
+}
 
 // ---------- Aplica o estado nos LEDs de uma vaga ----------
 void aplicarEstado(int indice, bool ocupada) {
@@ -44,15 +57,16 @@ void callback(char* topic, byte* payload, unsigned int length) {
   memcpy(msg, payload, n);
   msg[n] = '\0';
 
-  // Extrai o número da vaga do fim do tópico (ex.: "fnd/garagem/vaga/2" -> 2)
+  // Extrai o número da vaga do fim do tópico (ex.: "garagem/vaga/2" -> 2)
   String t = String(topic);
   int barra = t.lastIndexOf('/');
   int numVaga = t.substring(barra + 1).toInt(); // 1, 2, 3...
 
-  if (numVaga < 1 || numVaga > NUM_VAGAS) return;
+  int indice = indiceDaVaga(numVaga);
+  if (indice < 0) return; // vaga de outro atuador
 
   bool ocupada = (strcmp(msg, "ocupada") == 0);
-  aplicarEstado(numVaga - 1, ocupada);
+  aplicarEstado(indice, ocupada);
 
   Serial.printf("Vaga %d -> %s\n", numVaga, ocupada ? "OCUPADA (vermelho)" : "LIVRE (verde)");
 }
@@ -88,6 +102,9 @@ void conectarMQTT() {
 
 void setup() {
   Serial.begin(115200);
+
+  uint64_t mac = ESP.getEfuseMac() & 0xFFFFFFFFFFFFULL;
+  snprintf(mqtt_client_id, sizeof(mqtt_client_id), "esp32-atuador-%012llx", mac);
 
   // Configura os pinos dos LEDs e inicia todas as vagas como "livre"
   for (int i = 0; i < NUM_VAGAS; i++) {

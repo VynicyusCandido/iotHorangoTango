@@ -38,13 +38,19 @@ broker MQTT, sem se conhecerem diretamente:
 4. **Publicação MQTT** — a cada mudança, o novo estado (`livre` /
    `ocupada`) é publicado no tópico da vaga (ex.: `garagem/vaga/1`) com
    o flag *retained*, para que qualquer assinante receba o último estado
-   assim que conectar.
+   assim que conectar. O estado também é republicado ao ligar e a cada
+   reconexão ao broker.
+5. **Status do nó** — ao conectar, o nó publica `online` em
+   `garagem/no/<id>/status` e a lista das vagas que monitora em
+   `garagem/no/<id>/vagas`. Se ele cair, o broker publica `offline`
+   sozinho (Last Will), e o app passa a mostrar essas vagas como
+   "sem dados".
 
 **Nó atuador (subscriber)**
 
-5. **Assinatura MQTT** — o ESP32 atuador assina `garagem/vaga/#` e, ao
+6. **Assinatura MQTT** — o ESP32 atuador assina `garagem/vaga/#` e, ao
    conectar, já recebe o estado retido de cada vaga.
-6. **Acionamento dos LEDs** — para cada mensagem, extrai o número da
+7. **Acionamento dos LEDs** — para cada mensagem, extrai o número da
    vaga do tópico e acende o LED verde (livre) ou vermelho (ocupada)
    correspondente.
 
@@ -140,10 +146,11 @@ const char* mqtt_server = "broker.hivemq.com";
 const int   mqtt_port   = 1883;
 ```
 
-Cada nó precisa de um `mqtt_client_id` **único** no broker (ex.:
-`esp32-garagem-...` no sensor e `esp32-atuador-...` no atuador). O
-prefixo de tópicos (`garagem/vaga/#`) deve ser **idêntico** nos dois
-sketches. Para simulação no Wokwi, use `ssid = "Wokwi-GUEST"` e
+O `mqtt_client_id` de cada nó é gerado automaticamente a partir do MAC
+do ESP32 (`esp32-sensor-<mac>` / `esp32-atuador-<mac>`), então o mesmo
+sketch pode ser gravado em várias placas sem conflito no broker. O
+prefixo de tópicos (`garagem`) deve ser **idêntico** nos dois sketches
+e no app. Para simulação no Wokwi, use `ssid = "Wokwi-GUEST"` e
 `password = ""`.
 
 ### 5. Ajustar o limiar de detecção (nó sensor)
@@ -323,17 +330,61 @@ flag *retained*, já exibe o último estado de cada vaga ao abrir.
 **Configuração**
 
 Em **Configurações** (no rodapé do app) dá para trocar o broker e o
-prefixo do tópico; os valores ficam salvos no navegador. Também é
-possível passar pela URL:
+tópico base; os valores ficam salvos no navegador. Também é possível
+passar pela URL:
 
 ```
-index.html?broker=ws://192.168.1.100:9001&prefixo=garagem/vaga
+index.html?broker=ws://192.168.1.100:9001&base=garagem
 ```
+
+**Vagas sem dados:** se um nó sensor perde a conexão, o broker publica
+`offline` no status dele (Last Will) e as vagas desse nó aparecem em
+cinza como "Sem dados", fora da contagem de livres. O broker detecta a
+queda pelo *keepalive* do MQTT, o que leva cerca de 20 segundos.
 
 **Com Mosquitto local:** o `mosquitto.conf` já abre um listener
 WebSocket na porta **9001** (libere-a no firewall também). Use
 `ws://<IP-do-PC>:9001` como broker no app. Se a página for servida por
 `https`, o navegador exige `wss://`.
+
+## Adicionar vagas
+
+Cada vaga tem um **número único na garagem**, definido explicitamente
+nos sketches (a ordem no array não importa).
+
+1. **Nó sensor:** acrescente a vaga em `vagas[]`, com o número e os
+   pinos do HC-SR04:
+
+   ```cpp
+   Vaga vagas[] = {
+     {1, 5, 18, false, true},   // {numero, trig, echo, false, true}
+     {2, 19, 34, false, true},
+   };
+   ```
+
+2. **Nó atuador:** acrescente o mesmo número com os pinos dos LEDs:
+
+   ```cpp
+   Vaga vagas[] = {
+     {1, 22, 23},   // {numero, ledVerde, ledVermelho}
+     {2, 25, 26},
+   };
+   ```
+
+3. **App:** nada a fazer; a vaga aparece sozinha.
+
+**Vários nós sensores:** grave o mesmo sketch em outro ESP32 e mude só
+`vagas[]` — cada nó deve ter números de vaga **diferentes** dos outros
+(ex.: nó A com 1–6, nó B com 7–12). O client ID e o status vêm do MAC.
+Da mesma forma, cada atuador pode cuidar só das vagas próximas a ele;
+mensagens de vagas que não estão no seu `vagas[]` são ignoradas.
+
+**Remover uma vaga:** tire-a dos sketches e apague o estado retido no
+broker: `mosquitto_pub -h <broker> -t garagem/vaga/<n> -n -r`.
+
+**Limites por ESP32:** cada HC-SR04 usa 2 GPIOs e cada vaga do atuador
+usa 2 LEDs; na prática cabem cerca de 6–8 sensores e 10–12 vagas de
+LED por placa. Acima disso, use mais nós ou LEDs endereçáveis (WS2812).
 
 ## Simulação no Wokwi
 
