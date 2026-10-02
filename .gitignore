@@ -1,2 +1,5 @@
 # Credenciais Wi-Fi dos sketches (ver src/*/secrets.example.h)
 secrets.h
+
+# Configuração da IDE (JetBrains)
+.idea/
