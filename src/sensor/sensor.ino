@@ -2,12 +2,16 @@
 #include <PubSubClient.h>
 
 // ---------- Configurações Wi-Fi ----------
-//const char* ssid = "SUA_REDE";
-//const char* password = "SUA_SENHA";
+// Rede e senha ficam em secrets.h, que NÃO vai para o git (.gitignore).
+// Copie secrets.example.h para secrets.h nesta mesma pasta e preencha.
+#if __has_include("secrets.h")
+#include "secrets.h"
+#else
+#error "Falta secrets.h: copie secrets.example.h para secrets.h e preencha WIFI_SSID e WIFI_PASSWORD"
+#endif
 
-const char* ssid = "Wokwi-GUEST";
-const char* password = "";
-
+const char* ssid = WIFI_SSID;
+const char* password = WIFI_PASSWORD;
 
 // ---------- Configurações MQTT ----------
 //const char* mqtt_server = "192.168.1.100"; // IP do broker Mosquitto

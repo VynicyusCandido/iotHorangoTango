@@ -143,11 +143,30 @@ selecionada em **Ferramentas → Placa**.
 
 ### 4. Configurar credenciais e broker
 
-No início de cada sketch, ajuste os parâmetros de rede e MQTT:
+**Wi-Fi:** a rede e a senha ficam num arquivo `secrets.h` dentro da
+pasta de cada sketch, que **não vai para o git** (está no `.gitignore`).
+Em cada pasta (`src/sensor/` e `src/atuador/`), copie o modelo e
+preencha:
+
+```bash
+cp src/sensor/secrets.example.h  src/sensor/secrets.h
+cp src/atuador/secrets.example.h src/atuador/secrets.h
+```
 
 ```cpp
-const char* ssid        = "SUA_REDE";
-const char* password    = "SUA_SENHA";
+#define WIFI_SSID     "SUA_REDE"
+#define WIFI_PASSWORD "SUA_SENHA"
+```
+
+Sem o `secrets.h`, a compilação para com a mensagem
+`Falta secrets.h: copie secrets.example.h para secrets.h ...`.
+
+> Nunca coloque a senha direto no `.ino`: o repositório é público. A
+> senha continua indo para o ESP32 na compilação, só não fica no GitHub.
+
+**MQTT:** no início de cada sketch, ajuste o broker:
+
+```cpp
 const char* mqtt_server = "broker.hivemq.com";
 const int   mqtt_port   = 1883;
 ```
@@ -156,8 +175,8 @@ O `mqtt_client_id` de cada nó é gerado automaticamente a partir do MAC
 do ESP32 (`esp32-sensor-<mac>` / `esp32-atuador-<mac>`), então o mesmo
 sketch pode ser gravado em várias placas sem conflito no broker. O
 prefixo de tópicos (`garagem`) deve ser **idêntico** nos dois sketches
-e no app. Para simulação no Wokwi, use `ssid = "Wokwi-GUEST"` e
-`password = ""`.
+e no app. Para simulação no Wokwi, use `WIFI_SSID "Wokwi-GUEST"` e
+`WIFI_PASSWORD ""` no `secrets.h`.
 
 ### 5. Ajustar o limiar de detecção (nó sensor)
 
@@ -280,11 +299,11 @@ const int   mqtt_port   = 1883;
 ### 7. Ajustar o Wi-Fi nos dois sketches
 
 O ESP32 e o computador do broker têm que estar na **mesma rede**. Troque
-a rede do Wokwi pela sua rede real, nos dois sketches:
+a rede do Wokwi pela sua rede real no `secrets.h` dos dois sketches:
 
 ```cpp
-const char* ssid     = "SUA_REDE";
-const char* password = "SUA_SENHA";
+#define WIFI_SSID     "SUA_REDE"
+#define WIFI_PASSWORD "SUA_SENHA"
 ```
 
 ### 8. Compilar e carregar nos ESP32 físicos
@@ -317,8 +336,8 @@ monitor serial (115200 baud) de cada um.
 ### Voltar ao broker público
 
 Para rodar de novo no Wokwi, reverta o `mqtt_server` para
-`broker.hivemq.com` e o Wi-Fi para `Wokwi-GUEST` (senha vazia) nos dois
-sketches.
+`broker.hivemq.com` nos dois sketches e o Wi-Fi para `Wokwi-GUEST`
+(senha vazia) nos dois `secrets.h`.
 
 ## App de vagas livres
 
@@ -399,7 +418,10 @@ LED por placa. Acima disso, use mais nós ou LEDs endereçáveis (WS2812).
 O projeto pode ser executado sem hardware físico no simulador
 [Wokwi](https://wokwi.com):
 
-- Use a rede `Wokwi-GUEST` (senha vazia) e um broker público.
+- Use a rede `Wokwi-GUEST` (senha vazia) e um broker público. No editor
+  do Wokwi, crie uma aba `secrets.h` (botão **+** ao lado das abas →
+  *New file*) com `#define WIFI_SSID "Wokwi-GUEST"` e
+  `#define WIFI_PASSWORD ""`.
 - No nó sensor, cada HC-SR04 possui um controle deslizante que simula a
   distância medida — arraste-o para abaixo do limiar para simular um
   veículo estacionando.
@@ -417,9 +439,12 @@ O projeto pode ser executado sem hardware físico no simulador
 │   └── IOT_24_08.pdf   # Documentação da disciplina
 ├── src/
 │   ├── sensor/
-│   │   └── sensor.ino  # Sketch do nó sensor (HC-SR04, publisher)
+│   │   ├── sensor.ino         # Sketch do nó sensor (HC-SR04, publisher)
+│   │   └── secrets.example.h  # Modelo do Wi-Fi (copiar para secrets.h)
 │   └── atuador/
-│       └── atuador.ino # Sketch do nó atuador (LEDs, subscriber)
+│       ├── atuador.ino        # Sketch do nó atuador (LEDs, subscriber)
+│       └── secrets.example.h  # Modelo do Wi-Fi (copiar para secrets.h)
+├── .gitignore          # Ignora os secrets.h
 ├── mosquitto.conf      # Configuração do broker local (opcional)
 └── README.md           # Este arquivo
 ```
