@@ -170,7 +170,8 @@ const float LIMIAR_CM = 30.0;
 
 ### 6. Compilar e carregar
 
-Carregue o sketch do sensor em um ESP32 e o do atuador em outro
+Carregue o sketch do sensor (`src/sensor/sensor.ino`) em um ESP32 e o
+do atuador (`src/atuador/atuador.ino`) em outro
 (**Ferramentas → Porta** correta para cada um) e clique em **Upload**.
 Abra o monitor serial (115200 baud) para acompanhar leituras e
 acionamentos.
@@ -410,14 +411,22 @@ O projeto pode ser executado sem hardware físico no simulador
 
 ```
 .
-├── app/                # App web de vagas livres (MQTT via WebSocket)
-├── docs/               # Documentação, diagramas e especificações do projeto
+├── app/
+│   └── index.html      # App web de vagas livres (MQTT via WebSocket)
+├── docs/
+│   └── IOT_24_08.pdf   # Documentação da disciplina
 ├── src/
-│   ├── sensor/         # Sketch do nó sensor (publisher)
-│   └── atuador/        # Sketch do nó atuador (LEDs, subscriber)
+│   ├── sensor/
+│   │   └── sensor.ino  # Sketch do nó sensor (HC-SR04, publisher)
+│   └── atuador/
+│       └── atuador.ino # Sketch do nó atuador (LEDs, subscriber)
 ├── mosquitto.conf      # Configuração do broker local (opcional)
 └── README.md           # Este arquivo
 ```
+
+Cada sketch fica numa pasta com o mesmo nome do arquivo `.ino`, como a
+Arduino IDE exige. Para abrir, use **Arquivo → Abrir** e escolha
+`src/sensor/sensor.ino` ou `src/atuador/atuador.ino`.
 
 ## Roadmap
 
