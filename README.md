@@ -189,6 +189,8 @@ Fluxogramas do firmware em
   - `WiFi` e `SPI` (nativas do ESP32)
 - No Windows, se a porta COM não aparecer, instale o driver CP210x da
   Silicon Labs
+- Servidor: Docker com `docker compose` (broker Mosquitto 2.1.2; backend
+  e banco nas próximas etapas)
 
 ## Como executar
 
@@ -292,28 +294,63 @@ publicações:
 - Assine `garagem/#` para ver estados das vagas e tags chegando em
   tempo real.
 
-## Broker local com Mosquitto (passo a passo)
+## Broker local com Mosquitto (Docker Compose)
 
-Por padrão o sketch publica/assina no broker **público**
-`broker.hivemq.com`. Para usar o broker **próprio** rodando no servidor
-(Mosquitto), siga os passos abaixo.
+O broker do projeto é o **Eclipse Mosquitto 2.1.2**, rodando em Docker
+no servidor. Sem `.env` configurado, o firmware usa o broker **público**
+`broker.hivemq.com`, sem autenticação, só para testes sem RFID.
 
 > **Pré-requisito:** este modo exige **ESP32 físico** na mesma rede Wi-Fi
-> do servidor que roda o Mosquitto. O ESP32 simulado no Wokwi alcança
-> só a internet pública, **não** enxerga o `localhost` nem a sua rede
-> local — para continuar no Wokwi, mantenha o broker público.
+> do servidor. O ESP32 simulado no Wokwi alcança só a internet pública e
+> **não** enxerga a sua rede local — para continuar no Wokwi, mantenha o
+> broker público.
 
-### 1. Instalar o Mosquitto
+O que o broker faz (`broker/`):
 
-- **Windows:** instalador oficial em
-  [mosquitto.org/download](https://mosquitto.org/download/)
-- **Linux (Debian/Ubuntu):** `sudo apt install mosquitto mosquitto-clients`
-- **macOS:** `brew install mosquitto`
+- **Usuário e senha obrigatórios** (`allow_anonymous false`). São três
+  usuários, definidos no `.env`:
 
-Os pacotes `-clients` / `mosquitto-clients` trazem os utilitários
-`mosquitto_pub` e `mosquitto_sub`, usados nos testes dos passos 5 e 8.
+  | Usuário (padrão) | Quem usa | Pode |
+  |---|---|---|
+  | `dispositivo` | ESP32 | publicar estado, RFID, telemetria, `ack` e `status` **só no próprio** `garagem/v1/<deviceId>/`; ler o próprio `cmd` |
+  | `backend` | backend (N3) | ler `garagem/v1/#`; único que publica `cmd` |
+  | `monitor` | equipe (testes) | só ler `garagem/#` |
 
-### 2. Descobrir o IP do servidor na rede local
+- **ACL** em `broker/acl`: cada ESP32 só mexe no próprio prefixo (o
+  firmware conecta com o `deviceId` como client id).
+- **Persistência:** mensagens retidas (estado das vagas, `status`)
+  sobrevivem ao reinício do broker (volume `mosquitto-dados`).
+- **Portas:** 1883 (MQTT) e 9001 (WebSocket, para MQTTX Web).
+
+### 1. Instalar o Docker
+
+- **Windows/macOS:** Docker Desktop
+- **Linux:** Docker Engine com o plugin `docker compose`
+
+Para os testes dos passos 4 e 7, instale também os clientes do Mosquitto
+(`mosquitto_pub` / `mosquitto_sub`): `sudo apt install mosquitto-clients`
+no Linux, `brew install mosquitto` no macOS ou o instalador de
+[mosquitto.org/download](https://mosquitto.org/download/) no Windows.
+
+> No Linux, se o pacote `mosquitto` (o broker) estiver instalado como
+> serviço, ele ocupa a porta 1883. Pare antes de subir o container:
+> `sudo systemctl disable --now mosquitto`.
+
+### 2. Configurar as senhas e subir o broker
+
+Na raiz do repositório:
+
+```bash
+cp .env.example .env     # troque as três senhas no .env
+docker compose up -d
+docker compose logs -f mosquitto   # Ctrl+C para sair dos logs
+```
+
+O `.env` não vai para o git. As senhas viram hash no arquivo de senhas
+do broker a cada subida; para trocar uma senha, edite o `.env` e rode
+`docker compose up -d` de novo.
+
+### 3. Descobrir o IP do servidor e liberar as portas
 
 O ESP32 precisa do **IP da máquina** do broker na LAN — não use
 `localhost` nem `127.0.0.1` (para o ESP32, isso apontaria para ele
@@ -322,106 +359,78 @@ mesmo).
 - **Windows:** `ipconfig` → campo **Endereço IPv4** (ex.: `192.168.1.100`)
 - **Linux/macOS:** `ip addr` (ou `ifconfig`) → endereço da interface Wi-Fi
 
-Anote esse IP; ele será usado nos passos 5, 6 e 8. Reserve esse IP no
-roteador (reserva DHCP): se ele mudar, o ESP32 precisa ser regravado.
-
-### 3. Subir o broker
-
-Na pasta do repositório (onde está o `mosquitto.conf`), execute:
-
-```bash
-mosquitto -c mosquitto.conf -v
-```
-
-O `mosquitto.conf` incluído já deixa o broker pronto para a rede:
-
-```conf
-listener 1883 0.0.0.0     # escuta em todas as interfaces (não só localhost)
-listener 9001 0.0.0.0     # WebSocket, usado pelo painel e pelo app
-protocol websockets
-allow_anonymous true      # aceita conexão sem usuário/senha (testes/faculdade)
-log_type all              # log detalhado...
-log_dest stdout           # ...impresso no terminal
-```
-
-O modo verboso (`-v`) imprime cada `CONNECT`, `SUBSCRIBE` e `PUBLISH` no
-terminal — deixe essa janela aberta; é onde você vê a comunicação
-acontecendo. Sem esse `.conf`, o Mosquitto 2.x só escuta em `localhost`
-e recusa conexões anônimas, e o ESP32 não conseguiria conectar.
-
-> `allow_anonymous true` serve para testes: qualquer aparelho na rede
-> pode ler os UIDs e publicar tags falsas. Antes de as tags darem
-> privilégios, configure usuário/senha e ACL no Mosquitto (ver ADR 0001).
-
-### 4. Liberar as portas no firewall
-
-O firewall do sistema costuma bloquear conexões de entrada. Libere a
-porta **1883** (ESP32) e a **9001** (painel e app):
+Reserve esse IP no roteador (reserva DHCP): se ele mudar, o ESP32
+precisa ser regravado. Libere as portas **1883** e **9001** no firewall:
 
 - **Windows:** Firewall do Windows → Regras de Entrada → Nova regra →
   Porta → TCP 1883, 9001 → Permitir
 - **Linux (ufw):** `sudo ufw allow 1883/tcp && sudo ufw allow 9001/tcp`
 
-### 5. Testar o broker na rede (antes de mexer no ESP32)
+### 4. Testar o broker na rede (antes de mexer no ESP32)
 
-De **outro** computador na mesma rede, confirme que o broker está
-acessível (troque o IP pelo do passo 2). Em dois terminais:
+De **outro** computador na mesma rede (troque o IP e as senhas):
 
 ```bash
-# terminal 1 — assina
-mosquitto_sub -h 192.168.1.100 -t "garagem/#" -v
+# terminal 1 — assina como monitor
+mosquitto_sub -h 192.168.1.100 -u monitor -P SENHA_MONITOR -t "garagem/#" -v
 
-# terminal 2 — publica
-mosquitto_pub -h 192.168.1.100 -t "garagem/vaga/1" -m "ocupada" -r
+# terminal 2 — publica como um dispositivo de teste
+mosquitto_pub -h 192.168.1.100 -u dispositivo -P SENHA_DISPOSITIVO \
+  -i esp32-garagem-teste -t "garagem/v1/esp32-garagem-teste/rfid" -m "teste"
 ```
 
-Se a mensagem aparecer no terminal 1, o broker está no ar e visível na
-rede — o ESP32 também vai conseguir conectar. Se não aparecer, revise os
-passos 2 a 4 (IP, `mosquitto.conf`, firewall) antes de seguir.
+Se a mensagem aparecer no terminal 1, o broker está no ar, visível na
+rede e com a ACL funcionando. Uma publicação fora do próprio prefixo
+(ex.: `-t garagem/v1/outro/rfid`) **não** deve aparecer.
 
-### 6. Apontar o sketch para o broker local
+### 5. Apontar o sketch para o broker local
 
-No `secrets.h`, defina o IP do servidor como broker e use a rede real
-— o ESP32 e o servidor têm que estar na **mesma rede**:
+No `secrets.h`, use a rede real, o IP do servidor e o usuário
+`dispositivo` do `.env`:
 
 ```cpp
 #define WIFI_SSID     "SUA_REDE"
 #define WIFI_PASSWORD "SUA_SENHA"
-#define MQTT_HOST     "192.168.1.100"  // IP do servidor com Mosquitto (passo 2)
+#define MQTT_HOST     "192.168.1.100"      // IP do servidor (passo 3)
+#define MQTT_USER     "dispositivo"
+#define MQTT_PASSWORD "SENHA_DISPOSITIVO"  // a mesma do .env
 ```
 
-### 7. Compilar e carregar no ESP32 físico
+### 6. Compilar e carregar no ESP32 físico
 
 **Ferramentas → Porta** correta → **Upload**. Abra o monitor serial
-(115200 baud).
+(115200 baud). Ele deve mostrar `Conectando ao broker MQTT... conectado.`
 
-### 8. Verificar a comunicação
+### 7. Verificar a comunicação
 
-- Na janela do Mosquitto (passo 3), você deve ver o `CONNECT` do ESP32
-  e os `PUBLISH` a cada mudança de estado, tag lida e telemetria.
-- Assine `mosquitto_sub -h <IP> -t "garagem/v1/#" -v` para ver os
-  eventos; ao ocupar/liberar a vaga, o LED reage e o estado aparece em
-  `garagem/v1/<deviceId>/vaga/N/estado`, e ao passar o carro com tag
-  sobre o leitor o UID aparece em `garagem/v1/<deviceId>/rfid`.
-- **Teste de queda (fila de eventos):** feche o Mosquitto, ocupe e
-  libere as vagas e passe tags. Os LEDs continuam funcionando e o
-  serial mostra os eventos indo para a fila. Suba o Mosquitto de novo:
-  em até 5 s o ESP32 reconecta e publica os eventos em ordem, cada um
-  com o horário em que aconteceu (`ts`).
+- `docker compose logs -f mosquitto` mostra o `New client connected` do
+  ESP32 com o `deviceId` e o usuário `dispositivo`.
+- Assine como monitor
+  (`mosquitto_sub -h <IP> -u monitor -P <senha> -t "garagem/v1/#" -v`)
+  para ver os eventos; ao ocupar/liberar a vaga, o LED reage e o estado
+  aparece em `garagem/v1/<deviceId>/vaga/N/estado`, e ao passar o carro
+  com tag sobre o leitor o UID aparece em `garagem/v1/<deviceId>/rfid`.
+- **Teste de queda (fila de eventos):** `docker compose stop mosquitto`,
+  ocupe e libere as vagas e passe tags. Os LEDs continuam funcionando e
+  o serial mostra os eventos indo para a fila. `docker compose start
+  mosquitto`: em até 5 s o ESP32 reconecta e publica os eventos em
+  ordem, cada um com o horário em que aconteceu (`ts`).
 
 ### Se não conectar (checklist rápido)
 
 - ESP32 e servidor estão na **mesma** rede Wi-Fi (2,4 GHz)?
-- O `MQTT_HOST` no `secrets.h` é o **IP da LAN** (passo 2), não `localhost`?
-- O Mosquitto está rodando **com** o `mosquitto.conf` (listener `0.0.0.0`,
-  `allow_anonymous true`)?
+- O `MQTT_HOST` no `secrets.h` é o **IP da LAN** (passo 3), não `localhost`?
+- `MQTT_USER` / `MQTT_PASSWORD` do `secrets.h` batem com o `.env`? O
+  serial mostra `rc 5` (não autorizado) quando não batem.
+- `docker compose ps` mostra o `mosquitto` como `healthy`?
 - As portas **1883** e **9001** estão liberadas no firewall?
-- O teste do passo 5, de outra máquina, funciona?
+- O teste do passo 4, de outra máquina, funciona?
 
 ### Voltar ao broker público
 
-Para rodar de novo no Wokwi, remova o `MQTT_HOST` do `secrets.h` (volta
-ao `broker.hivemq.com`) e use o Wi-Fi `Wokwi-GUEST` (senha vazia).
+Para rodar de novo no Wokwi, remova `MQTT_HOST`, `MQTT_USER` e
+`MQTT_PASSWORD` do `secrets.h` (volta ao `broker.hivemq.com`) e use o
+Wi-Fi `Wokwi-GUEST` (senha vazia).
 
 ## Painel de configuração e monitoramento
 
@@ -461,6 +470,7 @@ porque o ESP32 sem broker não mostra estado. O broker detecta a queda
 pelo *keepalive* do MQTT, o que leva cerca de 20 segundos.
 
 **Com Mosquitto local:** use `ws://<IP-do-servidor>:9001` como broker.
+O broker local exige usuário e senha, que o painel da N1 não envia.
 Se a página for servida por `https`, o navegador exige `wss://`.
 
 ## App do motorista
@@ -536,8 +546,13 @@ O projeto pode ser executado sem hardware físico no simulador
 │       ├── garagem.ino          # Firmware único (HC-SR04 + RC522 + LED RGB)
 │       ├── tipos.h              # Tipos do firmware (estado, evento da fila)
 │       └── secrets.example.h    # Modelo do Wi-Fi (copiar para secrets.h)
-├── .gitignore                   # Ignora os secrets.h
-├── mosquitto.conf               # Configuração do broker local
+├── .gitignore                   # Ignora os secrets.h e o .env
+├── broker/
+│   ├── mosquitto.conf           # Configuração do broker (Mosquitto 2.1)
+│   ├── acl                      # Quem pode publicar/assinar o quê
+│   └── iniciar.sh               # Gera as senhas a partir do .env e sobe o broker
+├── compose.yaml                 # docker compose: broker (backend e banco nas próximas etapas)
+├── .env.example                 # Modelo das senhas do broker (copiar para .env)
 └── README.md                    # Este arquivo
 ```
 
@@ -555,4 +570,5 @@ Arduino IDE exige. Para abrir, use **Arquivo → Abrir** e escolha
 - [ ] Exibir tags RFID no painel
 - [ ] App do motorista
 - [ ] Definir privilégios dos carros com tag (ADR futuro)
-- [ ] Autenticação e ACL no Mosquitto antes de liberar privilégios
+- [x] Autenticação e ACL no Mosquitto (Docker Compose, Mosquitto 2.1)
+- [ ] TLS no MQTT (avaliar; CP12, R16)

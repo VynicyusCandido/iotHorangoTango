@@ -1,0 +1,32 @@
+# HorangoTango Park — serviços do servidor.
+# Uso: cp .env.example .env (e troque as senhas); docker compose up -d
+# Backend (FastAPI) e banco (PostgreSQL) entram aqui nas próximas etapas.
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.1.2-alpine
+    restart: unless-stopped
+    command: ["/bin/sh", "/mosquitto/config/iniciar.sh"]
+    environment:
+      MQTT_DISPOSITIVO_USER: ${MQTT_DISPOSITIVO_USER:?defina no .env}
+      MQTT_DISPOSITIVO_PASSWORD: ${MQTT_DISPOSITIVO_PASSWORD:?defina no .env}
+      MQTT_BACKEND_USER: ${MQTT_BACKEND_USER:?defina no .env}
+      MQTT_BACKEND_PASSWORD: ${MQTT_BACKEND_PASSWORD:?defina no .env}
+      MQTT_MONITOR_USER: ${MQTT_MONITOR_USER:?defina no .env}
+      MQTT_MONITOR_PASSWORD: ${MQTT_MONITOR_PASSWORD:?defina no .env}
+    ports:
+      - "${MQTT_PORTA:-1883}:1883"
+      - "${MQTT_PORTA_WS:-9001}:9001"
+    volumes:
+      - ./broker/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./broker/acl:/mosquitto/config/acl:ro
+      - ./broker/iniciar.sh:/mosquitto/config/iniciar.sh:ro
+      - mosquitto-dados:/mosquitto/data
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -u \"$$MQTT_MONITOR_USER\" -P \"$$MQTT_MONITOR_PASSWORD\" -t '$$SYS/broker/uptime' -C 1 -W 15 > /dev/null"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  mosquitto-dados:
