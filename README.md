@@ -47,102 +47,115 @@ Angelico, Vynicyus Candido.
 
 ## Como funciona
 
-Um ESP32 cuida das duas vagas (`src/garagem/garagem.ino`). O firmware
-tem três partes, que só se comunicam pelo broker MQTT:
+Um ESP32 cuida das duas vagas (`src/garagem/garagem.ino`) e segue o
+contrato MQTT v1 ([CONTRATOS.md](CONTRATOS.md)). Sensores e LEDs
+funcionam sem rede; o que acontece com o sistema fora do ar vai para
+uma fila e é publicado quando o broker volta
+([ADR 0003](docs/adr/0003-firmware-v1-fila-de-eventos.md)).
 
-**Ultrassônico (publisher) — estado da vaga**
+**Ultrassônico — estado da vaga**
 
 1. **Leitura dos sensores** — a cada 1 s o ESP32 dispara o HC-SR04 de
    cada vaga, um de cada vez (para um não captar o eco do outro), e
    mede a distância até o objeto à frente (o chão da vaga, ou um
    veículo estacionado).
-2. **Processamento local** — a distância medida é comparada com dois
-   limiares (histerese): abaixo de 25 cm a vaga passa a ocupada, acima
-   de 35 cm passa a livre, e entre os dois mantém o estado atual. Isso
+2. **Histerese** — abaixo de 25 cm a vaga passa a ocupada, acima de
+   35 cm passa a livre, e entre os dois mantém o estado atual. Isso
    evita que uma leitura oscilando perto do limite fique trocando o
    estado.
-3. **Confirmação da mudança** — o estado só muda depois de 3 leituras
-   seguidas concordando (cerca de 3 s), o que filtra ruído e alguém
-   passando na frente do sensor. O ESP32 só publica quando o estado
-   confirmado muda, evitando tráfego desnecessário na rede.
+3. **Confirmação** — o estado só muda depois de 3 leituras seguidas
+   concordando (cerca de 3 s), o que filtra ruído e alguém passando na
+   frente do sensor.
    **Falha no sensor:** leituras sem eco ou fora da faixa do HC-SR04
    (2–400 cm) são descartadas, nunca contam como "livre". Após 5
-   seguidas, a vaga é publicada como `erro`; o painel a mostra como
-   "Sem dados" (falha no sensor) e o LED apaga.
-4. **Publicação MQTT** — a cada mudança, o novo estado (`livre` /
-   `ocupada` / `erro`) é publicado no tópico da vaga (ex.:
-   `garagem/vaga/1`) com o flag *retained*, para que qualquer assinante
-   receba o último estado assim que conectar. O estado também é
-   republicado ao ligar e a cada reconexão ao broker.
-5. **Status do nó** — ao conectar, o ESP32 publica `online` em
-   `garagem/no/<id>/status` e a lista das vagas que monitora (`1,2`) em
-   `garagem/no/<id>/vagas`. Se ele cair, o broker publica `offline`
-   sozinho (Last Will), e o painel passa a mostrar as vagas como
-   "sem dados".
+   seguidas, a vaga passa a `erro`.
+4. **Evento** — cada mudança confirmada vira um evento na fila, com o
+   momento em que aconteceu.
 
-**RFID (publisher) — identificação do carro**
+**RFID — identificação do carro**
 
-6. **Leitura das tags** — a cada 100 ms o ESP32 consulta o RC522 de
-   cada vaga. Cada tag lida tem o UID publicado em `garagem/rfid/N`
-   (ex.: `04a1b2c3`), sem *retained* — é um evento. A mesma tag lida de
+5. **Leitura das tags** — a cada 100 ms o ESP32 consulta o RC522 de
+   cada vaga. O leitor fica **sob o piso** da maquete e a tag, embaixo
+   do carro. Cada tag lida vira um evento na fila; a mesma tag lida de
    novo no mesmo leitor em menos de 3 s é ignorada.
-7. **Independente da vaga** — o RFID não lê nem altera o estado da
-   vaga. Cruzar a tag com a vaga ocupada (ex.: tag lida antes de o
-   ultrassônico confirmar o carro) é papel do painel e do app do
-   motorista.
-8. **Leitor travado** — a cada 5 s o ESP32 confere se os RC522 respondem
+6. **Independente da vaga** — o RFID não lê nem altera o estado da
+   vaga. Cruzar a tag com a vaga ocupada é papel do backend.
+7. **Leitor travado** — a cada 5 s o ESP32 confere se os RC522 respondem
    e, se algum parou, reinicia os dois (o pino de reset é comum).
 
-**LEDs (subscriber) — indicação na vaga**
+**LEDs — regra local**
 
-9. **Assinatura MQTT** — o ESP32 assina `garagem/vaga/#`, inclusive o
-   que ele mesmo publica, e ao conectar já recebe o estado retido de
-   cada vaga. Assim o LED mostra exatamente o que o broker distribuiu
-   para todos.
-10. **Acionamento** — LED RGB verde (livre) ou vermelho (ocupada).
-    Estado `erro`, desconhecido ou **sem conexão com o broker**: LED
-    apagado, em vez de mostrar um estado que pode estar errado.
+8. O LED de cada vaga segue o estado do sensor no próprio ESP32, **com
+   ou sem rede**: verde = livre, vermelho = ocupada, vermelho piscando =
+   sensor em falha, apagado = ainda sem leitura.
 
-Outros assinantes (painel de configurações e monitoramento, app do
-motorista) consomem os mesmos tópicos em paralelo. Durante os testes,
-todas as leituras e acionamentos também podem ser acompanhados pelo
-monitor serial do ESP32.
+**Fila de eventos e publicação**
+
+9. **Fila única, em ordem** — mudanças de estado e tags lidas ficam na
+   mesma fila (até 64 eventos; cheia, descarta o mais antigo). Com o
+   broker disponível, os eventos são publicados em ordem, com QoS 1, e
+   só saem da fila depois que o broker confirma o recebimento.
+10. **Horário** — o ESP32 sincroniza o relógio por NTP ao ter Wi-Fi e
+    continua contando durante a queda. Cada evento leva o horário em que
+    aconteceu (`ts`), não o da publicação. Se o relógio nunca
+    sincronizou, vai `"ts": null` com o `uptime_ms`, como prevê o
+    contrato.
+11. **Reconexão sem bloqueio** — o Wi-Fi reconecta sozinho e o firmware
+    tenta o broker a cada 5 s, sem parar o laço. Ao conectar, publica o
+    `status` (`online`), esvazia a fila e republica o estado atual de
+    cada vaga. Se o ESP32 cair, o broker publica `offline` sozinho (Last
+    Will).
+12. **Telemetria** — a cada 10 s, com o broker disponível: distância de
+    cada vaga, RSSI do Wi-Fi e uptime.
+
+Durante os testes, todas as leituras, tags e eventos também podem ser
+acompanhados pelo monitor serial do ESP32.
 
 ## Arquitetura
 
 ```
-            ┌──────────────── ESP32 (vagas 1 e 2) ────────────────┐
-HC-SR04 ×2 ─┤ ultrassônico ──► publica garagem/vaga/N ─────────────┼──┐
-RC522   ×2 ─┤ RFID         ──► publica garagem/rfid/N ─────────────┼──┤
-LED RGB ×2 ◄┤ LEDs         ◄── assina  garagem/vaga/# ◄────────────┼──┤
-            └──────────────────────────────────────────────────────┘  │
-                                                                      ▼
-                          Servidor: Mosquitto ──┬──► Painel de configs (mesmo servidor)
-                                                └──► App do motorista (celular)
+            ┌──────────────── ESP32 (vagas 1 e 2) ─────────────────┐
+HC-SR04 ×2 ─┤ ultrassônico ─┐                                       │
+RC522   ×2 ─┤ RFID ─────────┼─► fila de eventos ─► publica (QoS 1) ─┼──┐
+LED RGB ×2 ◄┤ LEDs ◄────────┘  (regra local, sem rede)              │  │
+            └───────────────────────────────────────────────────────┘  │
+                                                                       ▼
+                                                  Servidor: Mosquitto ──► backend (N3)
 ```
 
-| Tópico                   | Conteúdo                                 | Retained | Quem publica | Quem assina           |
-|--------------------------|------------------------------------------|:--------:|--------------|-----------------------|
-| `garagem/vaga/N`         | `livre` / `ocupada` / `erro`             | sim      | ESP32        | LEDs, painel, app     |
-| `garagem/rfid/N`         | UID da tag, ex.: `04a1b2c3`              | não      | ESP32        | painel, app           |
-| `garagem/no/<id>/status` | `online` / `offline` (Last Will)         | sim      | ESP32/broker | painel                |
-| `garagem/no/<id>/vagas`  | vagas do nó, ex.: `1,2`                  | sim      | ESP32        | painel                |
+Tópicos (`{id}` = `deviceId`, ex.: `esp32-garagem-240ac4000110`, derivado
+do MAC). Payloads completos em [CONTRATOS.md](CONTRATOS.md).
+
+| Tópico                            | Conteúdo                                         | QoS | Retained |
+|-----------------------------------|--------------------------------------------------|:---:|:--------:|
+| `garagem/v1/{id}/vaga/{n}/estado` | `livre` / `ocupada` / `erro` + distância (JSON)  | 1   | sim      |
+| `garagem/v1/{id}/rfid`            | vaga + UID da tag, ex.: `04A1B2C3` (JSON)        | 1   | não      |
+| `garagem/v1/{id}/telemetria`      | distâncias, RSSI, uptime — a cada 10 s (JSON)    | 0   | não      |
+| `garagem/v1/{id}/status`          | `online` / `offline` (Last Will), firmware, vagas | 1   | sim      |
+
+Exemplo (`garagem/v1/esp32-garagem-240ac4000110/rfid`):
+
+```json
+{ "v": 1, "deviceId": "esp32-garagem-240ac4000110", "ts": "2026-11-10T21:30:07Z",
+  "vaga": 1, "uid": "04A1B2C3" }
+```
+
+Reserva de vaga (estado `reservada`, LED azul) e os tópicos `cmd` / `ack`
+entram na próxima etapa.
 
 - **Broker:** Mosquitto no servidor (ou HiveMQ público para testes sem
   RFID)
-- **Painel de configurações e monitoramento:** `app/index.html`, servido
-  pelo mesmo servidor do broker
-- **App do motorista:** roda no celular de cada motorista (em
-  desenvolvimento)
+- **Painel da N1 (`app/index.html`):** ainda lê os tópicos antigos
+  (`garagem/vaga/N`) e **não mostra os dados do firmware v1**. Será
+  substituído pelo painel servido pelo backend.
+- **App do motorista:** em desenvolvimento
 
 Fluxogramas do firmware em
 [docs/fluxograma-firmware.md](docs/fluxograma-firmware.md).
 
 > Em um broker público como o HiveMQ, os tópicos `garagem/#` são
 > compartilhados com qualquer pessoa — inclusive os UIDs das tags. Use o
-> Mosquitto local sempre que o RFID estiver ligado. Se precisar do
-> broker público, use um prefixo único (ex.: `horangotango/garagem`),
-> idêntico no firmware e no painel.
+> Mosquitto local sempre que o RFID estiver ligado.
 
 ## Hardware necessário
 
@@ -170,7 +183,8 @@ Fluxogramas do firmware em
 - Arduino IDE (ou PlatformIO / arduino-cli)
 - Suporte à placa ESP32 instalado no gerenciador de placas
 - Bibliotecas:
-  - `PubSubClient` (Nick O'Leary) — comunicação MQTT
+  - `MQTT` (Joel Gaehwiler, arduino-mqtt) — comunicação MQTT com QoS 1
+  - `ArduinoJson` (Benoit Blanchon), versão 7 — payloads JSON
   - `MFRC522` (GithubCommunity) — leitores RFID
   - `WiFi` e `SPI` (nativas do ESP32)
 - No Windows, se a porta COM não aparecer, instale o driver CP210x da
@@ -200,8 +214,9 @@ tensão no Echo em hardware físico. GND comum a todos os componentes.
 
 ### 3. Instalar as dependências
 
-Na Arduino IDE, abra o gerenciador de bibliotecas e instale
-`PubSubClient` (Nick O'Leary) e `MFRC522` (GithubCommunity). Confirme
+Na Arduino IDE, abra o gerenciador de bibliotecas e instale `MQTT`
+(Joel Gaehwiler), `ArduinoJson` 7.x (Benoit Blanchon) e `MFRC522`
+(GithubCommunity). A `PubSubClient` não é mais usada. Confirme
 que a placa ESP32 está selecionada em **Ferramentas → Placa**.
 
 ### 4. Configurar credenciais e broker
@@ -225,17 +240,20 @@ Sem o `secrets.h`, a compilação para com a mensagem
 > Nunca coloque a senha direto no `.ino`: o repositório é público. A
 > senha continua indo para o ESP32 na compilação, só não fica no GitHub.
 
-**MQTT:** no início do sketch, ajuste o broker:
+**MQTT:** o broker também fica no `secrets.h`. Sem estas linhas, o
+firmware usa `broker.hivemq.com:1883` sem usuário:
 
 ```cpp
-const char* mqtt_server = "broker.hivemq.com";
-const int   mqtt_port   = 1883;
+#define MQTT_HOST     "192.168.1.100"   // IP do servidor com Mosquitto
+#define MQTT_PORT     1883
+#define MQTT_USER     "garagem"         // vazio = conexão anônima
+#define MQTT_PASSWORD "SENHA_DO_BROKER"
 ```
 
-O `mqtt_client_id` é gerado automaticamente a partir do MAC do ESP32
-(`esp32-garagem-<mac>`). O prefixo de tópicos (`garagem`) deve ser
-**idêntico** no sketch e no painel. Para simulação no Wokwi, use
-`WIFI_SSID "Wokwi-GUEST"` e `WIFI_PASSWORD ""` no `secrets.h`.
+O `deviceId` é gerado automaticamente a partir do MAC do ESP32
+(`esp32-garagem-<mac>`) e aparece no monitor serial ao ligar. Para
+simulação no Wokwi, use `WIFI_SSID "Wokwi-GUEST"` e `WIFI_PASSWORD ""`
+no `secrets.h`.
 
 ### 5. Ajustar os limiares de detecção
 
@@ -259,8 +277,8 @@ abaixo de 10 cm e livre acima de 13 cm.
 Abra `src/garagem/garagem.ino`, escolha a porta em
 **Ferramentas → Porta** e clique em **Upload**. Abra o monitor serial
 (115200 baud). Ao ligar, ele mostra se cada RC522 respondeu
-(`RFID vaga N: leitor OK` ou `LEITOR NAO RESPONDE`), e depois cada
-leitura, tag e mudança de LED.
+(`RFID vaga N: leitor OK` ou `LEITOR NAO RESPONDE`) e o `deviceId`, e
+depois cada mudança de estado, tag lida, queda e volta da rede.
 
 ### 7. Monitorar via MQTT
 
@@ -363,20 +381,13 @@ passos 2 a 4 (IP, `mosquitto.conf`, firewall) antes de seguir.
 
 ### 6. Apontar o sketch para o broker local
 
-Altere o `mqtt_server` em `src/garagem/garagem.ino`. A porta continua
-`1883`:
-
-```cpp
-const char* mqtt_server = "192.168.1.100"; // IP do servidor com Mosquitto (passo 2)
-const int   mqtt_port   = 1883;
-```
-
-E troque a rede do Wokwi pela rede real no `secrets.h` — o ESP32 e o
-servidor têm que estar na **mesma rede**:
+No `secrets.h`, defina o IP do servidor como broker e use a rede real
+— o ESP32 e o servidor têm que estar na **mesma rede**:
 
 ```cpp
 #define WIFI_SSID     "SUA_REDE"
 #define WIFI_PASSWORD "SUA_SENHA"
+#define MQTT_HOST     "192.168.1.100"  // IP do servidor com Mosquitto (passo 2)
 ```
 
 ### 7. Compilar e carregar no ESP32 físico
@@ -386,22 +397,22 @@ servidor têm que estar na **mesma rede**:
 
 ### 8. Verificar a comunicação
 
-- Na janela do Mosquitto (passo 3), você deve ver o `CONNECT` do ESP32,
-  o `SUBSCRIBE` em `garagem/vaga/#` e os `PUBLISH` a cada mudança de
-  estado e a cada tag lida.
-- Assine `mosquitto_sub -h <IP> -t "garagem/#" -v` para ver estados e
-  tags; ao ocupar/liberar a vaga, o LED deve reagir, e ao aproximar uma
-  tag o UID aparece em `garagem/rfid/N`.
-- **Prova de que é IoT (passa pela rede):** com o sensor ainda medindo,
-  derrube o broker (feche o Mosquitto) — o LED **apaga e para de
-  atualizar**, mesmo estando na mesma placa que o sensor. Isso demonstra
-  que o comando trafega pela rede/MQTT, e não por ligação direta entre
-  sensor e LED.
+- Na janela do Mosquitto (passo 3), você deve ver o `CONNECT` do ESP32
+  e os `PUBLISH` a cada mudança de estado, tag lida e telemetria.
+- Assine `mosquitto_sub -h <IP> -t "garagem/v1/#" -v` para ver os
+  eventos; ao ocupar/liberar a vaga, o LED reage e o estado aparece em
+  `garagem/v1/<deviceId>/vaga/N/estado`, e ao passar o carro com tag
+  sobre o leitor o UID aparece em `garagem/v1/<deviceId>/rfid`.
+- **Teste de queda (fila de eventos):** feche o Mosquitto, ocupe e
+  libere as vagas e passe tags. Os LEDs continuam funcionando e o
+  serial mostra os eventos indo para a fila. Suba o Mosquitto de novo:
+  em até 5 s o ESP32 reconecta e publica os eventos em ordem, cada um
+  com o horário em que aconteceu (`ts`).
 
 ### Se não conectar (checklist rápido)
 
 - ESP32 e servidor estão na **mesma** rede Wi-Fi (2,4 GHz)?
-- O `mqtt_server` é o **IP da LAN** (passo 2), não `localhost`?
+- O `MQTT_HOST` no `secrets.h` é o **IP da LAN** (passo 2), não `localhost`?
 - O Mosquitto está rodando **com** o `mosquitto.conf` (listener `0.0.0.0`,
   `allow_anonymous true`)?
 - As portas **1883** e **9001** estão liberadas no firewall?
@@ -409,11 +420,15 @@ servidor têm que estar na **mesma rede**:
 
 ### Voltar ao broker público
 
-Para rodar de novo no Wokwi, reverta o `mqtt_server` para
-`broker.hivemq.com` e o Wi-Fi para `Wokwi-GUEST` (senha vazia) no
-`secrets.h`.
+Para rodar de novo no Wokwi, remova o `MQTT_HOST` do `secrets.h` (volta
+ao `broker.hivemq.com`) e use o Wi-Fi `Wokwi-GUEST` (senha vazia).
 
 ## Painel de configuração e monitoramento
+
+> **Painel da N1.** Ele ainda lê os tópicos antigos (`garagem/vaga/N`,
+> texto puro) e não mostra os dados do firmware v1. Para acompanhar o
+> firmware atual, use `mosquitto_sub` ou o MQTTX. O painel da N3 será
+> servido pelo backend.
 
 O diretório `app/` contém o painel web (um único `index.html`, sem
 build), que roda no mesmo servidor do broker e mostra em tempo real
@@ -451,8 +466,7 @@ Se a página for servida por `https`, o navegador exige `wss://`.
 ## App do motorista
 
 App web que roda no celular de cada motorista: mostra as vagas livres
-(`garagem/vaga/#`) e destaca a vaga do motorista quando a tag dele é
-lida (`garagem/rfid/#`). **Ainda não implementado** — ver
+e destaca a vaga do motorista quando a tag dele é lida. **Ainda não implementado** — ver
 [ADR 0001](docs/adr/0001-rfid-e-app-motorista.md). Na demonstração, o
 celular precisa estar no mesmo Wi-Fi do servidor e alcançar a porta
 9001.
@@ -474,7 +488,8 @@ Vaga vagas[] = {
 O painel não precisa de alteração; a vaga aparece sozinha.
 
 **Remover uma vaga:** tire-a do sketch e apague o estado retido no
-broker: `mosquitto_pub -h <broker> -t garagem/vaga/<n> -n -r`.
+broker:
+`mosquitto_pub -h <broker> -t garagem/v1/<deviceId>/vaga/<n>/estado -n -r`.
 
 **Limites por ESP32:** cada vaga usa 5 GPIOs (Trig, Echo, SS, R, G) além
 dos 4 do SPI compartilhado. Com o mapa atual sobram poucos pinos livres
@@ -496,12 +511,10 @@ O projeto pode ser executado sem hardware físico no simulador
   estacionando (o estado muda após ~3 s de leituras confirmadas). Para
   simular falha no sensor, desconecte o fio do Echo: após ~5 s a vaga
   vira `erro`.
-- Observe os LEDs alternarem entre verde e vermelho conforme os estados
-  chegam do broker.
+- Observe os LEDs alternarem entre verde e vermelho conforme o sensor
+  confirma cada estado.
 - O Wokwi não simula o RC522: o monitor serial mostra
-  `LEITOR NAO RESPONDE` e o resto do firmware segue funcionando. Para
-  testar o painel com tags, publique na mão:
-  `mosquitto_pub -h broker.hivemq.com -t garagem/rfid/1 -m 04a1b2c3`.
+  `LEITOR NAO RESPONDE` e o resto do firmware segue funcionando.
 - Acompanhe o resultado no monitor serial e em um cliente MQTT.
 
 ## Estrutura do repositório
@@ -512,13 +525,16 @@ O projeto pode ser executado sem hardware físico no simulador
 │   └── index.html               # Painel de configuração e monitoramento (MQTT via WebSocket)
 ├── docs/
 │   ├── adr/
-│   │   └── 0001-rfid-e-app-motorista.md  # Decisão: RFID + ultrassônico, ESP32 único, app do motorista
+│   │   ├── 0001-rfid-e-app-motorista.md  # Decisão: RFID + ultrassônico, ESP32 único, app do motorista
+│   │   ├── 0002-troca-sensor-de-peso-por-garagem.md
+│   │   └── 0003-firmware-v1-fila-de-eventos.md  # Contrato v1, fila de eventos offline, leitor sob o piso
 │   ├── fluxograma-firmware.md   # Fluxogramas do firmware e dos subscribers
 │   ├── mapa-de-pinos.md         # Ligações do ESP32
 │   └── IOT_24_08.pdf            # Documentação da disciplina
 ├── src/
 │   └── garagem/
 │       ├── garagem.ino          # Firmware único (HC-SR04 + RC522 + LED RGB)
+│       ├── tipos.h              # Tipos do firmware (estado, evento da fila)
 │       └── secrets.example.h    # Modelo do Wi-Fi (copiar para secrets.h)
 ├── .gitignore                   # Ignora os secrets.h
 ├── mosquitto.conf               # Configuração do broker local
@@ -534,6 +550,8 @@ Arduino IDE exige. Para abrir, use **Arquivo → Abrir** e escolha
 - [x] Indicadores visuais (LED por vaga) como atuadores locais
 - [x] Painel web de vagas livres
 - [x] Identificação de carros por RFID (firmware)
+- [x] Firmware no contrato MQTT v1 (JSON, QoS 1, NTP, fila de eventos offline, LED com regra local)
+- [ ] Reserva de vaga, comandos (`cmd` / `ack`) e configuração em NVS
 - [ ] Exibir tags RFID no painel
 - [ ] App do motorista
 - [ ] Definir privilégios dos carros com tag (ADR futuro)
