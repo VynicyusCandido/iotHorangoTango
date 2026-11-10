@@ -17,6 +17,11 @@ registrada neste arquivo, com o campo `v` dos payloads incrementado.
   `"ts": null, "ts_sincronizado": false, "uptime_ms": <ms desde o boot>`.
 - Grandezas com unidade vão como `{ "valor": <número>, "unidade": "<un>" }`.
 - O backend é o único publicador de `cmd`.
+- Eventos ocorridos com o dispositivo sem conexão (mudanças de estado e
+  tags lidas) são guardados em fila e publicados **em ordem** ao
+  reconectar; `ts` é sempre o momento do evento, não o da publicação.
+  Esclarecimento sem mudança de formato (ver
+  [ADR 0003](docs/adr/0003-firmware-v1-fila-de-eventos.md)).
 
 ## Árvore de tópicos
 
