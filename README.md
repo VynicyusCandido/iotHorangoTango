@@ -85,9 +85,31 @@ uma fila e é publicado quando o broker volta
 
 **LEDs — regra local**
 
-8. O LED de cada vaga segue o estado do sensor no próprio ESP32, **com
-   ou sem rede**: verde = livre, vermelho = ocupada, vermelho piscando =
-   sensor em falha, apagado = ainda sem leitura.
+8. O LED de cada vaga segue o estado da vaga no próprio ESP32, **com
+   ou sem rede**: verde = livre, vermelho = ocupada, azul = reservada,
+   vermelho piscando = sensor em falha, apagado = ainda sem leitura.
+
+**Comandos e reserva**
+
+O ESP32 assina `garagem/v1/{id}/cmd` (só o backend publica nele) e
+responde cada comando em `garagem/v1/{id}/ack`
+([ADR 0004](docs/adr/0004-comandos-reserva-e-nvs.md)):
+
+- **`reservar`** — só com a vaga livre. Resposta: `aceito` → estado
+  `reservada` (LED azul) → `executado`. Ocupada ou já reservada:
+  `VAGA_OCUPADA`; sensor em falha ou ainda sem leitura: `VAGA_EM_ERRO`.
+  A reserva termina quando o carro chega (vira `ocupada`), quando o
+  tempo acaba (`duracao_min`, ou o padrão configurado) — contado no
+  ESP32, mesmo sem rede —, por `cancelar_reserva` ou se o sensor falhar.
+- **`cancelar_reserva`** — volta ao estado do sensor; sem reserva:
+  `SEM_RESERVA`.
+- **`configurar`** — limiares do ultrassônico e duração padrão da
+  reserva. Grava na NVS (memória que sobrevive ao reinício) e aplica na
+  hora, sem regravar o firmware.
+- **`commandId` repetido** não é executado de novo (`COMANDO_DUPLICADO`).
+  Comando enviado com o ESP32 offline não é entregue depois.
+- A reserva fica só na RAM: se o ESP32 reiniciar, a vaga volta ao estado
+  do sensor.
 
 **Fila de eventos e publicação**
 
@@ -132,6 +154,8 @@ do MAC). Payloads completos em [CONTRATOS.md](CONTRATOS.md).
 | `garagem/v1/{id}/rfid`            | vaga + UID da tag, ex.: `04A1B2C3` (JSON)        | 1   | não      |
 | `garagem/v1/{id}/telemetria`      | distâncias, RSSI, uptime — a cada 10 s (JSON)    | 0   | não      |
 | `garagem/v1/{id}/status`          | `online` / `offline` (Last Will), firmware, vagas | 1   | sim      |
+| `garagem/v1/{id}/cmd`             | `reservar` / `cancelar_reserva` / `configurar` (só o backend publica) | 1 | não |
+| `garagem/v1/{id}/ack`             | `aceito` / `rejeitado` (+ `erro`) / `executado` + `commandId` | 1 | não |
 
 Exemplo (`garagem/v1/esp32-garagem-240ac4000110/rfid`):
 
@@ -140,8 +164,6 @@ Exemplo (`garagem/v1/esp32-garagem-240ac4000110/rfid`):
   "vaga": 1, "uid": "04A1B2C3" }
 ```
 
-Reserva de vaga (estado `reservada`, LED azul) e os tópicos `cmd` / `ack`
-entram na próxima etapa.
 
 - **Broker:** Mosquitto no servidor (ou HiveMQ público para testes sem
   RFID)
@@ -165,7 +187,7 @@ Fluxogramas do firmware em
 - 2× leitor RFID RC522 + tags de **13,56 MHz** (MIFARE 1K; tags de
   125 kHz não funcionam)
 - 2× LED RGB catodo comum (ou módulo RGB com resistores)
-- Resistores: 2× 220 Ω (vermelho) e 2× 68–100 Ω (verde) para os LEDs;
+- Resistores: 2× 220 Ω (vermelho) e 4× 68–100 Ω (verde e azul) para os LEDs;
   2× 1 kΩ + 2× 2 kΩ para o divisor de tensão do Echo (dispensável com
   HC-SR04P)
 - Protoboards (a placa ocupa quase toda a largura de uma de 830 furos;
@@ -205,10 +227,10 @@ cd iotHorangoTango
 
 Siga o [mapa de pinos](docs/mapa-de-pinos.md). Resumo:
 
-| Vaga | HC-SR04 Trig / Echo | RC522 SS | LED RGB R / G |
-|:----:|:-------------------:|:--------:|:-------------:|
-| 1    | GPIO 25 / 34        | GPIO 5   | GPIO 32 / 33  |
-| 2    | GPIO 26 / 35        | GPIO 4   | GPIO 27 / 13  |
+| Vaga | HC-SR04 Trig / Echo | RC522 SS | LED RGB R / G / B  |
+|:----:|:-------------------:|:--------:|:------------------:|
+| 1    | GPIO 25 / 34        | GPIO 5   | GPIO 32 / 33 / 16  |
+| 2    | GPIO 26 / 35        | GPIO 4   | GPIO 27 / 13 / 17  |
 
 Os dois RC522 dividem o SPI (SCK 18, MISO 19, MOSI 23) e o RST (22),
 alimentados no 3V3. Os HC-SR04 vão no VIN (5 V), com o divisor de
@@ -259,20 +281,22 @@ no `secrets.h`.
 
 ### 5. Ajustar os limiares de detecção
 
-Defina no código as distâncias que separam "livre" de "ocupada",
-conforme a altura de montagem do sensor sobre a vaga. Mantenha uma
-folga entre os dois valores (a faixa de histerese):
+As distâncias que separam "livre" de "ocupada" dependem da altura de
+montagem do sensor. Os padrões (ocupada abaixo de 25 cm, livre acima de
+35 cm, reserva de 15 min) são para carro real. Na maquete (carrinho de
+brinquedo, sensor a ~15 cm do chão), meça e ajuste **sem regravar o
+firmware**, com o comando `configurar` publicado como `backend`:
 
-```cpp
-const float LIMIAR_OCUPA_CM  = 25.0;  // abaixo disto: ocupada
-const float LIMIAR_LIBERA_CM = 35.0;  // acima disto: livre
-const int   LEITURAS_CONFIRMACAO = 3; // leituras seguidas para trocar o estado
-const int   FALHAS_PARA_ERRO     = 5; // leituras inválidas seguidas até "erro"
+```bash
+mosquitto_pub -h <IP> -u backend -P <senha> -q 1 \
+  -t "garagem/v1/<deviceId>/cmd" \
+  -m '{"v":1,"commandId":"cfg-1","acao":"configurar","limiar_ocupa_cm":10,"limiar_libera_cm":13,"duracao_reserva_min":15}'
 ```
 
-Os valores padrão são para carro real. Na maquete (carrinho de
-brinquedo, sensor a ~15 cm do chão), meça e ajuste — algo como ocupada
-abaixo de 10 cm e livre acima de 13 cm.
+Regras: `limiar_ocupa_cm` entre 2 e 200; `limiar_libera_cm` maior que
+`limiar_ocupa_cm` + 2 e até 400; `duracao_reserva_min` entre 1 e 60. O
+ESP32 grava na NVS e o monitor serial mostra a configuração a cada
+boot. Mantenha uma folga entre os dois limiares (a faixa de histerese).
 
 ### 6. Compilar e carregar
 
@@ -415,6 +439,19 @@ No `secrets.h`, use a rede real, o IP do servidor e o usuário
   o serial mostra os eventos indo para a fila. `docker compose start
   mosquitto`: em até 5 s o ESP32 reconecta e publica os eventos em
   ordem, cada um com o horário em que aconteceu (`ts`).
+- **Teste de reserva:** assine `garagem/v1/<deviceId>/ack` como monitor
+  e publique como `backend`:
+
+  ```bash
+  mosquitto_pub -h <IP> -u backend -P <senha> -q 1 \
+    -t "garagem/v1/<deviceId>/cmd" \
+    -m '{"v":1,"commandId":"c-1","acao":"reservar","vaga":1,"duracao_min":2}'
+  ```
+
+  Com a vaga livre: `ack` `aceito`, estado `reservada` (LED azul) e
+  `ack` `executado`; depois de 2 min a vaga volta a `livre`. Repetir o
+  mesmo `commandId` devolve `COMANDO_DUPLICADO`; reservar vaga ocupada
+  devolve `VAGA_OCUPADA`.
 
 ### Se não conectar (checklist rápido)
 
@@ -490,8 +527,8 @@ do RC522 (SS) e do LED RGB:
 
 ```cpp
 Vaga vagas[] = {
-  {1, 25, 34, 5, 32, 33},  // {numero, trig, echo, rfidSS, ledVermelho, ledVerde}
-  {2, 26, 35, 4, 27, 13},
+  {1, 25, 34, 5, 32, 33, 16},  // {numero, trig, echo, rfidSS, ledVermelho, ledVerde, ledAzul}
+  {2, 26, 35, 4, 27, 13, 17},
 };
 ```
 
@@ -501,9 +538,9 @@ O painel não precisa de alteração; a vaga aparece sozinha.
 broker:
 `mosquitto_pub -h <broker> -t garagem/v1/<deviceId>/vaga/<n>/estado -n -r`.
 
-**Limites por ESP32:** cada vaga usa 5 GPIOs (Trig, Echo, SS, R, G) além
-dos 4 do SPI compartilhado. Com o mapa atual sobram poucos pinos livres
-(21, 36, 39, 16, 17); uma terceira vaga caberia só com ajustes. Acima
+**Limites por ESP32:** cada vaga usa 6 GPIOs (Trig, Echo, SS, R, G, B)
+além dos 4 do SPI compartilhado. Com o mapa atual sobram poucos pinos
+livres (21, 36, 39); uma terceira vaga não cabe sem mudar o mapa. Acima
 disso, use mais ESP32 — cada um com números de vaga **diferentes** — ou
 LEDs endereçáveis (WS2812).
 
@@ -537,7 +574,8 @@ O projeto pode ser executado sem hardware físico no simulador
 │   ├── adr/
 │   │   ├── 0001-rfid-e-app-motorista.md  # Decisão: RFID + ultrassônico, ESP32 único, app do motorista
 │   │   ├── 0002-troca-sensor-de-peso-por-garagem.md
-│   │   └── 0003-firmware-v1-fila-de-eventos.md  # Contrato v1, fila de eventos offline, leitor sob o piso
+│   │   ├── 0003-firmware-v1-fila-de-eventos.md  # Contrato v1, fila de eventos offline, leitor sob o piso
+│   │   └── 0004-comandos-reserva-e-nvs.md       # Comandos, reserva com LED azul, configuração em NVS
 │   ├── fluxograma-firmware.md   # Fluxogramas do firmware e dos subscribers
 │   ├── mapa-de-pinos.md         # Ligações do ESP32
 │   └── IOT_24_08.pdf            # Documentação da disciplina
@@ -566,7 +604,7 @@ Arduino IDE exige. Para abrir, use **Arquivo → Abrir** e escolha
 - [x] Painel web de vagas livres
 - [x] Identificação de carros por RFID (firmware)
 - [x] Firmware no contrato MQTT v1 (JSON, QoS 1, NTP, fila de eventos offline, LED com regra local)
-- [ ] Reserva de vaga, comandos (`cmd` / `ack`) e configuração em NVS
+- [x] Reserva de vaga, comandos (`cmd` / `ack`) e configuração em NVS
 - [ ] Exibir tags RFID no painel
 - [ ] App do motorista
 - [ ] Definir privilégios dos carros com tag (ADR futuro)
