@@ -17,6 +17,11 @@ forma, motoristas podem consultar previamente quais vagas estão
 disponíveis antes de entrar no estacionamento, e os LEDs orientam quem
 já está circulando pela garagem.
 
+![Maquete planejada para a N3: duas vagas com HC-SR04, RC522 e LED RGB, controladas por um ESP32](docs/horangotango-park-maquete.png)
+
+*Maquete planejada para a N3 (ilustração conceitual, conforme o
+[CP12](docs/CP12.md)).*
+
 O RFID é um complemento: carro sem tag é detectado normalmente pelo
 ultrassônico. A tag apenas identifica o veículo, para que motoristas
 cadastrados recebam privilégios (ainda a definir). A decisão está
