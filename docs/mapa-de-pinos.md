@@ -19,8 +19,8 @@ Echo 2 →  D35  ●─┤                      ├─● D21     (reserva)
  R  v1 →  D32  ●─┤       ESP-32         ├─● D19  ← SPI MISO
  G  v1 →  D33  ●─┤                      ├─● D18  ← SPI SCK
 Trig 1 →  D25  ●─┤                      ├─● D5   ← SS RC522 vaga 1
-Trig 2 →  D26  ●─┤                      ├─● TX2  ← (17) B v2 opcional
- R  v2 →  D27  ●─┤                      ├─● RX2  ← (16) B v1 opcional
+Trig 2 →  D26  ●─┤                      ├─● TX2  ← (17) B v2 (azul)
+ R  v2 →  D27  ●─┤                      ├─● RX2  ← (16) B v1 (azul)
           D14  ●─┤                      ├─● D4   ← SS RC522 vaga 2
           D12  ●─┤                      ├─● D2      (LED azul da placa)
  G  v2 →  D13  ●─┤                      ├─● D15
@@ -57,10 +57,10 @@ Trig 2 →  D26  ●─┤                      ├─● TX2  ← (17) B v2 opc
 | 33   | LED verde           | 1    | RGB `G`             | saída   |
 | 27   | LED vermelho        | 2    | RGB `R`             | saída   |
 | 13   | LED verde           | 2    | RGB `G`             | saída   |
-| 16   | LED azul (opcional) | 1    | RGB `B`             | saída   |
-| 17   | LED azul (opcional) | 2    | RGB `B`             | saída   |
+| 16   | LED azul            | 1    | RGB `B`             | saída   |
+| 17   | LED azul            | 2    | RGB `B`             | saída   |
 
-Total: 14 GPIOs (16 com o azul).
+Total: 16 GPIOs. O azul indica vaga **reservada** (ADR 0004).
 
 ## Ligações por componente
 
@@ -111,10 +111,10 @@ sem divisor.
 | Pino comum (`−`) | GND                      | GND                      |
 | `R`              | 220 Ω → GPIO 32          | 220 Ω → GPIO 27          |
 | `G`              | 68–100 Ω → GPIO 33       | 68–100 Ω → GPIO 13       |
-| `B` (opcional)   | 68–100 Ω → GPIO 16       | 68–100 Ω → GPIO 17       |
+| `B`              | 68–100 Ω → GPIO 16       | 68–100 Ω → GPIO 17       |
 
-Lógica: `HIGH` acende. Livre = `G`; ocupada = `R`; erro/sem dados =
-apagado (ou `B`, se o azul for usado).
+Lógica: `HIGH` acende. Livre = `G`; ocupada = `R`; reservada = `B`;
+sensor em falha = `R` piscando; ainda sem leitura = apagado.
 
 > **Resistor do verde menor que o do vermelho.** O verde e o azul de um
 > LED RGB precisam de ~3,0 V para acender; com os 3,3 V do GPIO e
@@ -157,7 +157,7 @@ const int PIN_SPI_MISO = 19;
 const int PIN_SPI_MOSI = 23;
 const int PIN_RFID_RST = 22;  // comum aos dois leitores
 
-// Cada vaga: {numero, trig, echo, rfidSS, ledVermelho, ledVerde}
-//   {1, 25, 34, 5, 32, 33},
-//   {2, 26, 35, 4, 27, 13},
+// Cada vaga: {numero, trig, echo, rfidSS, ledVermelho, ledVerde, ledAzul}
+//   {1, 25, 34, 5, 32, 33, 16},
+//   {2, 26, 35, 4, 27, 13, 17},
 ```
