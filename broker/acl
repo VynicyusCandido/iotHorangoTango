@@ -1,0 +1,20 @@
+# Permissões do broker (contrato v1, CONTRATOS.md).
+# Regras "pattern" valem para todos os usuários; %c = client id.
+# O firmware conecta com client id = deviceId, então cada ESP32 só
+# publica e lê dentro do próprio prefixo garagem/v1/<deviceId>/.
+pattern write garagem/v1/%c/telemetria
+pattern write garagem/v1/%c/vaga/+/estado
+pattern write garagem/v1/%c/rfid
+pattern write garagem/v1/%c/ack
+pattern write garagem/v1/%c/status
+pattern read garagem/v1/%c/cmd
+
+# Backend: lê tudo do contrato e é o único que publica comandos
+user backend
+topic read garagem/v1/#
+topic write garagem/v1/+/cmd
+
+# Monitor (equipe, testes com mosquitto_sub/MQTTX): só leitura
+user monitor
+topic read garagem/#
+topic read $SYS/#

@@ -90,9 +90,31 @@ uma fila e é publicado quando o broker volta
 
 **LEDs — regra local**
 
-8. O LED de cada vaga segue o estado do sensor no próprio ESP32, **com
-   ou sem rede**: verde = livre, vermelho = ocupada, vermelho piscando =
-   sensor em falha, apagado = ainda sem leitura.
+8. O LED de cada vaga segue o estado da vaga no próprio ESP32, **com
+   ou sem rede**: verde = livre, vermelho = ocupada, azul = reservada,
+   vermelho piscando = sensor em falha, apagado = ainda sem leitura.
+
+**Comandos e reserva**
+
+O ESP32 assina `garagem/v1/{id}/cmd` (só o backend publica nele) e
+responde cada comando em `garagem/v1/{id}/ack`
+([ADR 0004](docs/adr/0004-comandos-reserva-e-nvs.md)):
+
+- **`reservar`** — só com a vaga livre. Resposta: `aceito` → estado
+  `reservada` (LED azul) → `executado`. Ocupada ou já reservada:
+  `VAGA_OCUPADA`; sensor em falha ou ainda sem leitura: `VAGA_EM_ERRO`.
+  A reserva termina quando o carro chega (vira `ocupada`), quando o
+  tempo acaba (`duracao_min`, ou o padrão configurado) — contado no
+  ESP32, mesmo sem rede —, por `cancelar_reserva` ou se o sensor falhar.
+- **`cancelar_reserva`** — volta ao estado do sensor; sem reserva:
+  `SEM_RESERVA`.
+- **`configurar`** — limiares do ultrassônico e duração padrão da
+  reserva. Grava na NVS (memória que sobrevive ao reinício) e aplica na
+  hora, sem regravar o firmware.
+- **`commandId` repetido** não é executado de novo (`COMANDO_DUPLICADO`).
+  Comando enviado com o ESP32 offline não é entregue depois.
+- A reserva fica só na RAM: se o ESP32 reiniciar, a vaga volta ao estado
+  do sensor.
 
 **Fila de eventos e publicação**
 
@@ -137,6 +159,8 @@ do MAC). Payloads completos em [CONTRATOS.md](CONTRATOS.md).
 | `garagem/v1/{id}/rfid`            | vaga + UID da tag, ex.: `04A1B2C3` (JSON)        | 1   | não      |
 | `garagem/v1/{id}/telemetria`      | distâncias, RSSI, uptime — a cada 10 s (JSON)    | 0   | não      |
 | `garagem/v1/{id}/status`          | `online` / `offline` (Last Will), firmware, vagas | 1   | sim      |
+| `garagem/v1/{id}/cmd`             | `reservar` / `cancelar_reserva` / `configurar` (só o backend publica) | 1 | não |
+| `garagem/v1/{id}/ack`             | `aceito` / `rejeitado` (+ `erro`) / `executado` + `commandId` | 1 | não |
 
 Exemplo (`garagem/v1/esp32-garagem-240ac4000110/rfid`):
 
@@ -145,8 +169,6 @@ Exemplo (`garagem/v1/esp32-garagem-240ac4000110/rfid`):
   "vaga": 1, "uid": "04A1B2C3" }
 ```
 
-Reserva de vaga (estado `reservada`, LED azul) e os tópicos `cmd` / `ack`
-entram na próxima etapa.
 
 - **Broker:** Mosquitto no servidor (ou HiveMQ público para testes sem
   RFID)
@@ -170,7 +192,7 @@ Fluxogramas do firmware em
 - 2× leitor RFID RC522 + tags de **13,56 MHz** (MIFARE 1K; tags de
   125 kHz não funcionam)
 - 2× LED RGB catodo comum (ou módulo RGB com resistores)
-- Resistores: 2× 220 Ω (vermelho) e 2× 68–100 Ω (verde) para os LEDs;
+- Resistores: 2× 220 Ω (vermelho) e 4× 68–100 Ω (verde e azul) para os LEDs;
   2× 1 kΩ + 2× 2 kΩ para o divisor de tensão do Echo (dispensável com
   HC-SR04P)
 - Protoboards (a placa ocupa quase toda a largura de uma de 830 furos;
@@ -194,6 +216,8 @@ Fluxogramas do firmware em
   - `WiFi` e `SPI` (nativas do ESP32)
 - No Windows, se a porta COM não aparecer, instale o driver CP210x da
   Silicon Labs
+- Servidor: Docker com `docker compose` (broker Mosquitto 2.1.2; backend
+  e banco nas próximas etapas)
 
 ## Como executar
 
@@ -208,10 +232,10 @@ cd iotHorangoTango
 
 Siga o [mapa de pinos](docs/mapa-de-pinos.md). Resumo:
 
-| Vaga | HC-SR04 Trig / Echo | RC522 SS | LED RGB R / G |
-|:----:|:-------------------:|:--------:|:-------------:|
-| 1    | GPIO 25 / 34        | GPIO 5   | GPIO 32 / 33  |
-| 2    | GPIO 26 / 35        | GPIO 4   | GPIO 27 / 13  |
+| Vaga | HC-SR04 Trig / Echo | RC522 SS | LED RGB R / G / B  |
+|:----:|:-------------------:|:--------:|:------------------:|
+| 1    | GPIO 25 / 34        | GPIO 5   | GPIO 32 / 33 / 16  |
+| 2    | GPIO 26 / 35        | GPIO 4   | GPIO 27 / 13 / 17  |
 
 Os dois RC522 dividem o SPI (SCK 18, MISO 19, MOSI 23) e o RST (22),
 alimentados no 3V3. Os HC-SR04 vão no VIN (5 V), com o divisor de
@@ -262,20 +286,22 @@ no `secrets.h`.
 
 ### 5. Ajustar os limiares de detecção
 
-Defina no código as distâncias que separam "livre" de "ocupada",
-conforme a altura de montagem do sensor sobre a vaga. Mantenha uma
-folga entre os dois valores (a faixa de histerese):
+As distâncias que separam "livre" de "ocupada" dependem da altura de
+montagem do sensor. Os padrões (ocupada abaixo de 25 cm, livre acima de
+35 cm, reserva de 15 min) são para carro real. Na maquete (carrinho de
+brinquedo, sensor a ~15 cm do chão), meça e ajuste **sem regravar o
+firmware**, com o comando `configurar` publicado como `backend`:
 
-```cpp
-const float LIMIAR_OCUPA_CM  = 25.0;  // abaixo disto: ocupada
-const float LIMIAR_LIBERA_CM = 35.0;  // acima disto: livre
-const int   LEITURAS_CONFIRMACAO = 3; // leituras seguidas para trocar o estado
-const int   FALHAS_PARA_ERRO     = 5; // leituras inválidas seguidas até "erro"
+```bash
+mosquitto_pub -h <IP> -u backend -P <senha> -q 1 \
+  -t "garagem/v1/<deviceId>/cmd" \
+  -m '{"v":1,"commandId":"cfg-1","acao":"configurar","limiar_ocupa_cm":10,"limiar_libera_cm":13,"duracao_reserva_min":15}'
 ```
 
-Os valores padrão são para carro real. Na maquete (carrinho de
-brinquedo, sensor a ~15 cm do chão), meça e ajuste — algo como ocupada
-abaixo de 10 cm e livre acima de 13 cm.
+Regras: `limiar_ocupa_cm` entre 2 e 200; `limiar_libera_cm` maior que
+`limiar_ocupa_cm` + 2 e até 400; `duracao_reserva_min` entre 1 e 60. O
+ESP32 grava na NVS e o monitor serial mostra a configuração a cada
+boot. Mantenha uma folga entre os dois limiares (a faixa de histerese).
 
 ### 6. Compilar e carregar
 
@@ -297,28 +323,63 @@ publicações:
 - Assine `garagem/#` para ver estados das vagas e tags chegando em
   tempo real.
 
-## Broker local com Mosquitto (passo a passo)
+## Broker local com Mosquitto (Docker Compose)
 
-Por padrão o sketch publica/assina no broker **público**
-`broker.hivemq.com`. Para usar o broker **próprio** rodando no servidor
-(Mosquitto), siga os passos abaixo.
+O broker do projeto é o **Eclipse Mosquitto 2.1.2**, rodando em Docker
+no servidor. Sem `.env` configurado, o firmware usa o broker **público**
+`broker.hivemq.com`, sem autenticação, só para testes sem RFID.
 
 > **Pré-requisito:** este modo exige **ESP32 físico** na mesma rede Wi-Fi
-> do servidor que roda o Mosquitto. O ESP32 simulado no Wokwi alcança
-> só a internet pública, **não** enxerga o `localhost` nem a sua rede
-> local — para continuar no Wokwi, mantenha o broker público.
+> do servidor. O ESP32 simulado no Wokwi alcança só a internet pública e
+> **não** enxerga a sua rede local — para continuar no Wokwi, mantenha o
+> broker público.
 
-### 1. Instalar o Mosquitto
+O que o broker faz (`broker/`):
 
-- **Windows:** instalador oficial em
-  [mosquitto.org/download](https://mosquitto.org/download/)
-- **Linux (Debian/Ubuntu):** `sudo apt install mosquitto mosquitto-clients`
-- **macOS:** `brew install mosquitto`
+- **Usuário e senha obrigatórios** (`allow_anonymous false`). São três
+  usuários, definidos no `.env`:
 
-Os pacotes `-clients` / `mosquitto-clients` trazem os utilitários
-`mosquitto_pub` e `mosquitto_sub`, usados nos testes dos passos 5 e 8.
+  | Usuário (padrão) | Quem usa | Pode |
+  |---|---|---|
+  | `dispositivo` | ESP32 | publicar estado, RFID, telemetria, `ack` e `status` **só no próprio** `garagem/v1/<deviceId>/`; ler o próprio `cmd` |
+  | `backend` | backend (N3) | ler `garagem/v1/#`; único que publica `cmd` |
+  | `monitor` | equipe (testes) | só ler `garagem/#` |
 
-### 2. Descobrir o IP do servidor na rede local
+- **ACL** em `broker/acl`: cada ESP32 só mexe no próprio prefixo (o
+  firmware conecta com o `deviceId` como client id).
+- **Persistência:** mensagens retidas (estado das vagas, `status`)
+  sobrevivem ao reinício do broker (volume `mosquitto-dados`).
+- **Portas:** 1883 (MQTT) e 9001 (WebSocket, para MQTTX Web).
+
+### 1. Instalar o Docker
+
+- **Windows/macOS:** Docker Desktop
+- **Linux:** Docker Engine com o plugin `docker compose`
+
+Para os testes dos passos 4 e 7, instale também os clientes do Mosquitto
+(`mosquitto_pub` / `mosquitto_sub`): `sudo apt install mosquitto-clients`
+no Linux, `brew install mosquitto` no macOS ou o instalador de
+[mosquitto.org/download](https://mosquitto.org/download/) no Windows.
+
+> No Linux, se o pacote `mosquitto` (o broker) estiver instalado como
+> serviço, ele ocupa a porta 1883. Pare antes de subir o container:
+> `sudo systemctl disable --now mosquitto`.
+
+### 2. Configurar as senhas e subir o broker
+
+Na raiz do repositório:
+
+```bash
+cp .env.example .env     # troque as três senhas no .env
+docker compose up -d
+docker compose logs -f mosquitto   # Ctrl+C para sair dos logs
+```
+
+O `.env` não vai para o git. As senhas viram hash no arquivo de senhas
+do broker a cada subida; para trocar uma senha, edite o `.env` e rode
+`docker compose up -d` de novo.
+
+### 3. Descobrir o IP do servidor e liberar as portas
 
 O ESP32 precisa do **IP da máquina** do broker na LAN — não use
 `localhost` nem `127.0.0.1` (para o ESP32, isso apontaria para ele
@@ -327,106 +388,91 @@ mesmo).
 - **Windows:** `ipconfig` → campo **Endereço IPv4** (ex.: `192.168.1.100`)
 - **Linux/macOS:** `ip addr` (ou `ifconfig`) → endereço da interface Wi-Fi
 
-Anote esse IP; ele será usado nos passos 5, 6 e 8. Reserve esse IP no
-roteador (reserva DHCP): se ele mudar, o ESP32 precisa ser regravado.
-
-### 3. Subir o broker
-
-Na pasta do repositório (onde está o `mosquitto.conf`), execute:
-
-```bash
-mosquitto -c mosquitto.conf -v
-```
-
-O `mosquitto.conf` incluído já deixa o broker pronto para a rede:
-
-```conf
-listener 1883 0.0.0.0     # escuta em todas as interfaces (não só localhost)
-listener 9001 0.0.0.0     # WebSocket, usado pelo painel e pelo app
-protocol websockets
-allow_anonymous true      # aceita conexão sem usuário/senha (testes/faculdade)
-log_type all              # log detalhado...
-log_dest stdout           # ...impresso no terminal
-```
-
-O modo verboso (`-v`) imprime cada `CONNECT`, `SUBSCRIBE` e `PUBLISH` no
-terminal — deixe essa janela aberta; é onde você vê a comunicação
-acontecendo. Sem esse `.conf`, o Mosquitto 2.x só escuta em `localhost`
-e recusa conexões anônimas, e o ESP32 não conseguiria conectar.
-
-> `allow_anonymous true` serve para testes: qualquer aparelho na rede
-> pode ler os UIDs e publicar tags falsas. Antes de as tags darem
-> privilégios, configure usuário/senha e ACL no Mosquitto (ver ADR 0001).
-
-### 4. Liberar as portas no firewall
-
-O firewall do sistema costuma bloquear conexões de entrada. Libere a
-porta **1883** (ESP32) e a **9001** (painel e app):
+Reserve esse IP no roteador (reserva DHCP): se ele mudar, o ESP32
+precisa ser regravado. Libere as portas **1883** e **9001** no firewall:
 
 - **Windows:** Firewall do Windows → Regras de Entrada → Nova regra →
   Porta → TCP 1883, 9001 → Permitir
 - **Linux (ufw):** `sudo ufw allow 1883/tcp && sudo ufw allow 9001/tcp`
 
-### 5. Testar o broker na rede (antes de mexer no ESP32)
+### 4. Testar o broker na rede (antes de mexer no ESP32)
 
-De **outro** computador na mesma rede, confirme que o broker está
-acessível (troque o IP pelo do passo 2). Em dois terminais:
+De **outro** computador na mesma rede (troque o IP e as senhas):
 
 ```bash
-# terminal 1 — assina
-mosquitto_sub -h 192.168.1.100 -t "garagem/#" -v
+# terminal 1 — assina como monitor
+mosquitto_sub -h 192.168.1.100 -u monitor -P SENHA_MONITOR -t "garagem/#" -v
 
-# terminal 2 — publica
-mosquitto_pub -h 192.168.1.100 -t "garagem/vaga/1" -m "ocupada" -r
+# terminal 2 — publica como um dispositivo de teste
+mosquitto_pub -h 192.168.1.100 -u dispositivo -P SENHA_DISPOSITIVO \
+  -i esp32-garagem-teste -t "garagem/v1/esp32-garagem-teste/rfid" -m "teste"
 ```
 
-Se a mensagem aparecer no terminal 1, o broker está no ar e visível na
-rede — o ESP32 também vai conseguir conectar. Se não aparecer, revise os
-passos 2 a 4 (IP, `mosquitto.conf`, firewall) antes de seguir.
+Se a mensagem aparecer no terminal 1, o broker está no ar, visível na
+rede e com a ACL funcionando. Uma publicação fora do próprio prefixo
+(ex.: `-t garagem/v1/outro/rfid`) **não** deve aparecer.
 
-### 6. Apontar o sketch para o broker local
+### 5. Apontar o sketch para o broker local
 
-No `secrets.h`, defina o IP do servidor como broker e use a rede real
-— o ESP32 e o servidor têm que estar na **mesma rede**:
+No `secrets.h`, use a rede real, o IP do servidor e o usuário
+`dispositivo` do `.env`:
 
 ```cpp
 #define WIFI_SSID     "SUA_REDE"
 #define WIFI_PASSWORD "SUA_SENHA"
-#define MQTT_HOST     "192.168.1.100"  // IP do servidor com Mosquitto (passo 2)
+#define MQTT_HOST     "192.168.1.100"      // IP do servidor (passo 3)
+#define MQTT_USER     "dispositivo"
+#define MQTT_PASSWORD "SENHA_DISPOSITIVO"  // a mesma do .env
 ```
 
-### 7. Compilar e carregar no ESP32 físico
+### 6. Compilar e carregar no ESP32 físico
 
 **Ferramentas → Porta** correta → **Upload**. Abra o monitor serial
-(115200 baud).
+(115200 baud). Ele deve mostrar `Conectando ao broker MQTT... conectado.`
 
-### 8. Verificar a comunicação
+### 7. Verificar a comunicação
 
-- Na janela do Mosquitto (passo 3), você deve ver o `CONNECT` do ESP32
-  e os `PUBLISH` a cada mudança de estado, tag lida e telemetria.
-- Assine `mosquitto_sub -h <IP> -t "garagem/v1/#" -v` para ver os
-  eventos; ao ocupar/liberar a vaga, o LED reage e o estado aparece em
-  `garagem/v1/<deviceId>/vaga/N/estado`, e ao passar o carro com tag
-  sobre o leitor o UID aparece em `garagem/v1/<deviceId>/rfid`.
-- **Teste de queda (fila de eventos):** feche o Mosquitto, ocupe e
-  libere as vagas e passe tags. Os LEDs continuam funcionando e o
-  serial mostra os eventos indo para a fila. Suba o Mosquitto de novo:
-  em até 5 s o ESP32 reconecta e publica os eventos em ordem, cada um
-  com o horário em que aconteceu (`ts`).
+- `docker compose logs -f mosquitto` mostra o `New client connected` do
+  ESP32 com o `deviceId` e o usuário `dispositivo`.
+- Assine como monitor
+  (`mosquitto_sub -h <IP> -u monitor -P <senha> -t "garagem/v1/#" -v`)
+  para ver os eventos; ao ocupar/liberar a vaga, o LED reage e o estado
+  aparece em `garagem/v1/<deviceId>/vaga/N/estado`, e ao passar o carro
+  com tag sobre o leitor o UID aparece em `garagem/v1/<deviceId>/rfid`.
+- **Teste de queda (fila de eventos):** `docker compose stop mosquitto`,
+  ocupe e libere as vagas e passe tags. Os LEDs continuam funcionando e
+  o serial mostra os eventos indo para a fila. `docker compose start
+  mosquitto`: em até 5 s o ESP32 reconecta e publica os eventos em
+  ordem, cada um com o horário em que aconteceu (`ts`).
+- **Teste de reserva:** assine `garagem/v1/<deviceId>/ack` como monitor
+  e publique como `backend`:
+
+  ```bash
+  mosquitto_pub -h <IP> -u backend -P <senha> -q 1 \
+    -t "garagem/v1/<deviceId>/cmd" \
+    -m '{"v":1,"commandId":"c-1","acao":"reservar","vaga":1,"duracao_min":2}'
+  ```
+
+  Com a vaga livre: `ack` `aceito`, estado `reservada` (LED azul) e
+  `ack` `executado`; depois de 2 min a vaga volta a `livre`. Repetir o
+  mesmo `commandId` devolve `COMANDO_DUPLICADO`; reservar vaga ocupada
+  devolve `VAGA_OCUPADA`.
 
 ### Se não conectar (checklist rápido)
 
 - ESP32 e servidor estão na **mesma** rede Wi-Fi (2,4 GHz)?
-- O `MQTT_HOST` no `secrets.h` é o **IP da LAN** (passo 2), não `localhost`?
-- O Mosquitto está rodando **com** o `mosquitto.conf` (listener `0.0.0.0`,
-  `allow_anonymous true`)?
+- O `MQTT_HOST` no `secrets.h` é o **IP da LAN** (passo 3), não `localhost`?
+- `MQTT_USER` / `MQTT_PASSWORD` do `secrets.h` batem com o `.env`? O
+  serial mostra `rc 5` (não autorizado) quando não batem.
+- `docker compose ps` mostra o `mosquitto` como `healthy`?
 - As portas **1883** e **9001** estão liberadas no firewall?
-- O teste do passo 5, de outra máquina, funciona?
+- O teste do passo 4, de outra máquina, funciona?
 
 ### Voltar ao broker público
 
-Para rodar de novo no Wokwi, remova o `MQTT_HOST` do `secrets.h` (volta
-ao `broker.hivemq.com`) e use o Wi-Fi `Wokwi-GUEST` (senha vazia).
+Para rodar de novo no Wokwi, remova `MQTT_HOST`, `MQTT_USER` e
+`MQTT_PASSWORD` do `secrets.h` (volta ao `broker.hivemq.com`) e use o
+Wi-Fi `Wokwi-GUEST` (senha vazia).
 
 ## Painel de configuração e monitoramento
 
@@ -466,6 +512,7 @@ porque o ESP32 sem broker não mostra estado. O broker detecta a queda
 pelo *keepalive* do MQTT, o que leva cerca de 20 segundos.
 
 **Com Mosquitto local:** use `ws://<IP-do-servidor>:9001` como broker.
+O broker local exige usuário e senha, que o painel da N1 não envia.
 Se a página for servida por `https`, o navegador exige `wss://`.
 
 ## App do motorista
@@ -485,8 +532,8 @@ do RC522 (SS) e do LED RGB:
 
 ```cpp
 Vaga vagas[] = {
-  {1, 25, 34, 5, 32, 33},  // {numero, trig, echo, rfidSS, ledVermelho, ledVerde}
-  {2, 26, 35, 4, 27, 13},
+  {1, 25, 34, 5, 32, 33, 16},  // {numero, trig, echo, rfidSS, ledVermelho, ledVerde, ledAzul}
+  {2, 26, 35, 4, 27, 13, 17},
 };
 ```
 
@@ -496,9 +543,9 @@ O painel não precisa de alteração; a vaga aparece sozinha.
 broker:
 `mosquitto_pub -h <broker> -t garagem/v1/<deviceId>/vaga/<n>/estado -n -r`.
 
-**Limites por ESP32:** cada vaga usa 5 GPIOs (Trig, Echo, SS, R, G) além
-dos 4 do SPI compartilhado. Com o mapa atual sobram poucos pinos livres
-(21, 36, 39, 16, 17); uma terceira vaga caberia só com ajustes. Acima
+**Limites por ESP32:** cada vaga usa 6 GPIOs (Trig, Echo, SS, R, G, B)
+além dos 4 do SPI compartilhado. Com o mapa atual sobram poucos pinos
+livres (21, 36, 39); uma terceira vaga não cabe sem mudar o mapa. Acima
 disso, use mais ESP32 — cada um com números de vaga **diferentes** — ou
 LEDs endereçáveis (WS2812).
 
@@ -532,7 +579,8 @@ O projeto pode ser executado sem hardware físico no simulador
 │   ├── adr/
 │   │   ├── 0001-rfid-e-app-motorista.md  # Decisão: RFID + ultrassônico, ESP32 único, app do motorista
 │   │   ├── 0002-troca-sensor-de-peso-por-garagem.md
-│   │   └── 0003-firmware-v1-fila-de-eventos.md  # Contrato v1, fila de eventos offline, leitor sob o piso
+│   │   ├── 0003-firmware-v1-fila-de-eventos.md  # Contrato v1, fila de eventos offline, leitor sob o piso
+│   │   └── 0004-comandos-reserva-e-nvs.md       # Comandos, reserva com LED azul, configuração em NVS
 │   ├── fluxograma-firmware.md   # Fluxogramas do firmware e dos subscribers
 │   ├── mapa-de-pinos.md         # Ligações do ESP32
 │   └── IOT_24_08.pdf            # Documentação da disciplina
@@ -541,8 +589,13 @@ O projeto pode ser executado sem hardware físico no simulador
 │       ├── garagem.ino          # Firmware único (HC-SR04 + RC522 + LED RGB)
 │       ├── tipos.h              # Tipos do firmware (estado, evento da fila)
 │       └── secrets.example.h    # Modelo do Wi-Fi (copiar para secrets.h)
-├── .gitignore                   # Ignora os secrets.h
-├── mosquitto.conf               # Configuração do broker local
+├── .gitignore                   # Ignora os secrets.h e o .env
+├── broker/
+│   ├── mosquitto.conf           # Configuração do broker (Mosquitto 2.1)
+│   ├── acl                      # Quem pode publicar/assinar o quê
+│   └── iniciar.sh               # Gera as senhas a partir do .env e sobe o broker
+├── compose.yaml                 # docker compose: broker (backend e banco nas próximas etapas)
+├── .env.example                 # Modelo das senhas do broker (copiar para .env)
 └── README.md                    # Este arquivo
 ```
 
@@ -556,8 +609,9 @@ Arduino IDE exige. Para abrir, use **Arquivo → Abrir** e escolha
 - [x] Painel web de vagas livres
 - [x] Identificação de carros por RFID (firmware)
 - [x] Firmware no contrato MQTT v1 (JSON, QoS 1, NTP, fila de eventos offline, LED com regra local)
-- [ ] Reserva de vaga, comandos (`cmd` / `ack`) e configuração em NVS
+- [x] Reserva de vaga, comandos (`cmd` / `ack`) e configuração em NVS
 - [ ] Exibir tags RFID no painel
 - [ ] App do motorista
 - [ ] Definir privilégios dos carros com tag (ADR futuro)
-- [ ] Autenticação e ACL no Mosquitto antes de liberar privilégios
+- [x] Autenticação e ACL no Mosquitto (Docker Compose, Mosquitto 2.1)
+- [ ] TLS no MQTT (avaliar; CP12, R16)

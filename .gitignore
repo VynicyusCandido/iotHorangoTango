@@ -3,3 +3,6 @@ secrets.h
 
 # Configuração da IDE (JetBrains)
 .idea/
+
+# Variáveis do docker compose (senhas)
+.env

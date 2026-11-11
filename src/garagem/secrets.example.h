@@ -9,9 +9,10 @@
 #define WIFI_PASSWORD "SUA_SENHA"
 
 // Broker MQTT (opcional). Sem estas linhas, o firmware usa
-// broker.hivemq.com:1883 sem usuário. Para o Mosquitto local, use o IP
-// do servidor; usuário e senha vazios = conexão anônima.
+// broker.hivemq.com:1883 sem usuário. Para o Mosquitto do projeto
+// (docker compose), use o IP do servidor e o usuário "dispositivo"
+// com a senha MQTT_DISPOSITIVO_PASSWORD do .env.
 // #define MQTT_HOST     "192.168.1.100"
 // #define MQTT_PORT     1883
-// #define MQTT_USER     "garagem"
-// #define MQTT_PASSWORD "SENHA_DO_BROKER"
+// #define MQTT_USER     "dispositivo"
+// #define MQTT_PASSWORD "SENHA_DO_DISPOSITIVO"

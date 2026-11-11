@@ -110,6 +110,24 @@ A configuração é gravada em NVS e sobrevive à reinicialização.
 
 **Intertravamento:** `reservar` só é aceito com a vaga `livre`.
 
+**Esclarecimentos** (sem mudança de formato; ver
+[ADR 0004](docs/adr/0004-comandos-reserva-e-nvs.md)):
+
+- `reservar` em vaga **já reservada** → `VAGA_OCUPADA` (vaga indisponível).
+- `reservar` antes da primeira leitura do sensor (estado desconhecido) →
+  `VAGA_EM_ERRO`: sem certeza, não reserva.
+- `duracao_min` em `reservar` é opcional; sem ele vale o
+  `duracao_reserva_min` configurado (padrão 15 min).
+- `configurar`: os três campos são obrigatórios; `limiar_libera_cm`
+  também não pode passar de 400 (alcance do HC-SR04).
+- Payload inválido sem `commandId` identificável → `ack` com
+  `"commandId": null` e `erro` `PAYLOAD_INVALIDO`.
+- A reserva vale até o carro chegar (`ocupada`), o tempo acabar (contado
+  no dispositivo, mesmo sem rede), `cancelar_reserva` ou falha do sensor
+  (`erro`). Não sobrevive ao reinício do dispositivo.
+- Comando publicado com o dispositivo offline não é entregue depois
+  (sessão limpa).
+
 ## Códigos de erro
 
 | Código | Quando |
