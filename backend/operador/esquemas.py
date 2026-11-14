@@ -77,6 +77,53 @@ class RfidOut(_Saida):
     uid: str
     ts: datetime
     ts_estimado: bool
+    apelido: Optional[str] = None  # se a tag estiver cadastrada
+
+
+UidTag = Annotated[str, Field(pattern=r"^(?:[0-9A-Fa-f]{2}){4,10}$")]
+
+
+class TagNova(BaseModel):
+    uid: UidTag
+    apelido: str = Field(min_length=1, max_length=64)
+    dono: Optional[str] = Field(default=None, max_length=64)
+
+
+class TagOut(_Saida):
+    uid: str
+    apelido: str
+    dono: Optional[str]
+    criada_em: datetime
+
+
+class TrocaSenha(BaseModel):
+    senha_atual: str
+    senha_nova: str = Field(min_length=8, max_length=72)
+
+
+class VagaEstatisticas(BaseModel):
+    device_id: str
+    vaga: int
+    ocupacao_por_hora: list[Optional[float]] = Field(
+        description="24 valores, um por hora local do dia: fração do tempo em que a vaga esteve ocupada"
+    )
+    permanencia_media_min: Optional[float]
+    permanencias: int
+    tempo_em_erro_min: float
+
+
+class DispositivoEstatisticas(BaseModel):
+    device_id: str
+    uptime: Optional[float] = Field(description="fração do período em que o dispositivo esteve online")
+    tempo_offline_min: float
+
+
+class EstatisticasOut(BaseModel):
+    desde: datetime
+    ate: datetime
+    fuso: str
+    vagas: list[VagaEstatisticas]
+    dispositivos: list[DispositivoEstatisticas]
 
 
 class AlertaOut(_Saida):

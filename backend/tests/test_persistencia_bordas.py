@@ -35,12 +35,27 @@ async def test_retido_nao_conta_como_contato(sessoes):
     async with sessoes() as s:
         d = await s.get(m.Dispositivo, DEVICE)
     assert d.online and d.ultimo_contato is None
-    assert await contar(sessoes, m.EventoStatus) == 0  # status retido é antigo, não é evento
 
     await g.tratar(*estado(1, "livre", "2026-11-12T10:00:00Z", 80.0))
     async with sessoes() as s:
         d = await s.get(m.Dispositivo, DEVICE)
     assert naive(d.ultimo_contato) == naive(RECEBIDO)
+
+
+async def test_status_retido_entra_no_historico_so_quando_muda(sessoes):
+    """Persistência subiu depois do ESP32: o status retido é a única notícia (uptime, R14)."""
+    g = gravador(sessoes)
+    await g.tratar(*status_online(), retido=True)
+    assert await contar(sessoes, m.EventoStatus) == 1
+    await g.tratar(*status_online(), retido=True)  # reconectou ao broker: reentregue
+    await g.tratar(*status_online())                # e ao vivo, mesma mensagem
+    assert await contar(sessoes, m.EventoStatus) == 1
+    await g.tratar(f"{BASE}/status", carga(v=1, deviceId=DEVICE, status="offline"), retido=True)
+    assert await contar(sessoes, m.EventoStatus) == 2
+    await g.tratar(*status_online(ts="2026-11-12T11:00:00Z"))  # voltou
+    async with sessoes() as s:
+        eventos = (await s.scalars(select(m.EventoStatus.status).order_by(m.EventoStatus.id))).all()
+    assert eventos == ["online", "offline", "online"]
 
 
 async def test_payload_binario_e_longo_e_guardado_como_texto(sessoes):
@@ -67,6 +82,17 @@ async def test_dispositivos_nao_se_misturam(sessoes):
     )
     assert await contar(sessoes, m.Dispositivo) == 2
     assert await contar(sessoes, m.EstadoVaga) == 2  # mesma vaga e ts, dispositivos diferentes
+
+
+async def test_duas_mudancas_no_mesmo_segundo_sao_gravadas(sessoes):
+    """ts tem precisão de segundos: reservar e cancelar logo em seguida não é repetição."""
+    g = gravador(sessoes)
+    await g.tratar(*estado(1, "livre", "2026-11-12T10:00:00Z", 80.0))
+    await g.tratar(*estado(1, "reservada", "2026-11-12T10:00:05Z", 80.0))
+    await g.tratar(*estado(1, "livre", "2026-11-12T10:00:05Z", 80.0))
+    async with sessoes() as s:
+        estados = (await s.scalars(select(m.EstadoVaga.estado).order_by(m.EstadoVaga.id))).all()
+    assert estados == ["livre", "reservada", "livre"]
 
 
 async def test_primeira_mensagem_de_dispositivo_novo_cria_offline(sessoes):

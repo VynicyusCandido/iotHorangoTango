@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path as Caminho
 
 from fastapi import FastAPI, HTTPException, Path, WebSocket
 
@@ -16,8 +17,10 @@ from comum import contrato
 from comum.config import configurar_log
 from comum.mqtt import assinar_para_sempre
 from comum.tempo_real import Difusor
+from comum.web import configurar_web
 from motorista.garagem import Garagem
 
+PASTA_PAGINAS = Caminho(__file__).parent / "paginas"
 TOPICOS = ["garagem/v1/+/vaga/+/estado", "garagem/v1/+/status", "garagem/v1/+/rfid"]
 
 
@@ -77,6 +80,7 @@ def criar_app(iniciar_mqtt: bool = True) -> FastAPI:
     async def saude():
         return {"servico": "motorista", "broker": conexao["broker"]}
 
+    configurar_web(app, PASTA_PAGINAS)
     return app
 
 

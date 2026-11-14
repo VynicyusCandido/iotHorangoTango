@@ -203,6 +203,9 @@ class Gravador:
             cmd.executado_em = cmd.executado_em or recebido
             if cmd.status in ("enviado", "aceito"):
                 cmd.status = "confirmado" if cmd.confirmado_em else "executado"
+                # Salva no banco a duração padrão que o ESP32 passou a usar
+                if cmd.acao == "configurar" and "duracao_reserva_min" in (cmd.parametros or {}):
+                    disp.duracao_reserva_min = int(cmd.parametros["duracao_reserva_min"])
 
     async def _status(self, s, disp, st: contrato.Status, recebido, retido) -> None:
         ts = st.ts or recebido
@@ -212,5 +215,15 @@ class Gravador:
             disp.firmware = st.firmware
         if st.vagas is not None:
             disp.vagas = st.vagas
-        if not retido:
+        # Histórico de online/offline (uptime, R14). Um status retido é
+        # antigo, mas é a única notícia se a persistência subiu depois do
+        # ESP32: entra quando muda o que o banco sabia. Repetição não entra.
+        ultimo = await s.scalar(
+            select(m.EventoStatus)
+            .where(m.EventoStatus.device_id == disp.device_id)
+            .order_by(m.EventoStatus.ts.desc(), m.EventoStatus.id.desc())
+            .limit(1)
+        )
+        repetido = ultimo is not None and ultimo.status == st.status and (retido or _naive(ultimo.ts) == _naive(ts))
+        if not repetido:
             s.add(m.EventoStatus(device_id=disp.device_id, status=st.status, ts=ts, recebido_em=recebido))

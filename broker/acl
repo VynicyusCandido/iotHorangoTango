@@ -9,11 +9,15 @@ pattern write garagem/v1/%c/ack
 pattern write garagem/v1/%c/status
 pattern read garagem/v1/%c/cmd
 
-# Backend (assinantes persistencia e operador, ADR 0005): lê tudo do
-# contrato; o operador é o único que publica comandos
+# Backend, assinante operador (ADR 0005): lê tudo do contrato e é o
+# único que publica comandos
 user backend
 topic read garagem/v1/#
 topic write garagem/v1/+/cmd
+
+# Backend, assinante persistencia: só lê (grava no banco, nunca publica)
+user persistencia
+topic read garagem/v1/#
 
 # Backend, assinante motorista (API pública do app do celular): só lê
 # estado das vagas, status e RFID; nunca publica

@@ -3,7 +3,8 @@
 #
 # Backend = três assinantes do broker (ADR 0005), mesma imagem (./backend):
 #   persistencia  grava tudo no PostgreSQL
-#   operador      API + tempo real do painel; único que publica comandos
+#   operador      API + tempo real do painel; único que publica comandos;
+#                 regras remotas, alertas e Telegram
 #   motorista     API + tempo real do app do motorista
 services:
   mosquitto:
@@ -15,6 +16,8 @@ services:
       MQTT_DISPOSITIVO_PASSWORD: ${MQTT_DISPOSITIVO_PASSWORD:?defina no .env}
       MQTT_BACKEND_USER: ${MQTT_BACKEND_USER:?defina no .env}
       MQTT_BACKEND_PASSWORD: ${MQTT_BACKEND_PASSWORD:?defina no .env}
+      MQTT_PERSISTENCIA_USER: ${MQTT_PERSISTENCIA_USER:?defina no .env}
+      MQTT_PERSISTENCIA_PASSWORD: ${MQTT_PERSISTENCIA_PASSWORD:?defina no .env}
       MQTT_MOTORISTA_USER: ${MQTT_MOTORISTA_USER:?defina no .env}
       MQTT_MOTORISTA_PASSWORD: ${MQTT_MOTORISTA_PASSWORD:?defina no .env}
       MQTT_MONITOR_USER: ${MQTT_MONITOR_USER:?defina no .env}
@@ -72,8 +75,8 @@ services:
     environment:
       DATABASE_URL: *banco
       MQTT_HOST: mosquitto
-      MQTT_USER: ${MQTT_BACKEND_USER}
-      MQTT_PASSWORD: ${MQTT_BACKEND_PASSWORD}
+      MQTT_USER: ${MQTT_PERSISTENCIA_USER}
+      MQTT_PASSWORD: ${MQTT_PERSISTENCIA_PASSWORD}
     depends_on: &depende
       migracoes:
         condition: service_completed_successfully
@@ -92,6 +95,9 @@ services:
       JWT_SEGREDO: ${JWT_SEGREDO:?defina no .env}
       ADMIN_USUARIO: ${ADMIN_USUARIO:?defina no .env}
       ADMIN_SENHA: ${ADMIN_SENHA:?defina no .env}
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      CORS_ORIGENS: ${CORS_ORIGENS:-}
     ports:
       - "${OPERADOR_PORTA:-8000}:8000"
     depends_on: *depende
@@ -104,8 +110,24 @@ services:
       MQTT_HOST: mosquitto
       MQTT_USER: ${MQTT_MOTORISTA_USER}
       MQTT_PASSWORD: ${MQTT_MOTORISTA_PASSWORD}
+      CORS_ORIGENS: ${CORS_ORIGENS:-}
     ports:
       - "${MOTORISTA_PORTA:-8001}:8000"
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+
+  # ESP32 simulado (J1): só sobe com --profile simulador
+  #   docker compose --profile simulador up -d
+  simulador:
+    image: horangotango-backend
+    profiles: ["simulador"]
+    restart: unless-stopped
+    command: ["python", "-m", "simulador", "--device-id", "esp32-garagem-simulado01"]
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_USER: ${MQTT_DISPOSITIVO_USER}
+      MQTT_PASSWORD: ${MQTT_DISPOSITIVO_PASSWORD}
     depends_on:
       mosquitto:
         condition: service_healthy

@@ -23,6 +23,9 @@ class Dispositivo(Base):
     online: Mapped[bool] = mapped_column(default=False)
     status_em: Mapped[Optional[datetime]] = mapped_column(Momento)        # último online/offline
     ultimo_contato: Mapped[Optional[datetime]] = mapped_column(Momento)   # última mensagem recebida ao vivo
+    # Duração padrão da reserva no ESP32 (comando configurar), salva no
+    # banco para a regra de reserva vencida (R8)
+    duracao_reserva_min: Mapped[int] = mapped_column(default=15, server_default="15")
 
 
 class EventoStatus(Base):
@@ -60,7 +63,9 @@ _SO_TS_REAL = {"postgresql_where": text("NOT ts_estimado"), "sqlite_where": text
 class EstadoVaga(Base):
     __tablename__ = "estados_vaga"
     __table_args__ = (
-        Index("ux_estados_vaga_evento", "device_id", "vaga", "ts", unique=True, **_SO_TS_REAL),
+        # Com o estado: duas mudanças no mesmo segundo (ts tem precisão de
+        # segundos) são eventos diferentes; repetição tem o mesmo estado
+        Index("ux_estados_vaga_evento", "device_id", "vaga", "ts", "estado", unique=True, **_SO_TS_REAL),
         Index("ix_estados_vaga_busca", "device_id", "vaga", "ts"),
     )
 
@@ -111,15 +116,33 @@ class Comando(Base):
 
 
 class Alerta(Base):
+    """Gerado pelas regras remotas (R8): sensor_erro, offline, reserva_expirada."""
+
     __tablename__ = "alertas"
+    __table_args__ = (Index("ix_alertas_chave", "chave"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     device_id: Mapped[str] = mapped_column(ForeignKey("dispositivos.device_id"))
     vaga: Mapped[Optional[int]] = mapped_column(Integer)
     tipo: Mapped[str] = mapped_column(String(32))
+    # Identifica a situação (ex.: "erro:<device>:1"): no máximo um alerta
+    # ativo por chave, e a regra o resolve quando a situação acaba
+    chave: Mapped[str] = mapped_column(String(128), default="", server_default="")
     mensagem: Mapped[str] = mapped_column(Text)
     criado_em: Mapped[datetime] = mapped_column(Momento)
     resolvido_em: Mapped[Optional[datetime]] = mapped_column(Momento)
+    notificado_em: Mapped[Optional[datetime]] = mapped_column(Momento)  # Telegram (R15)
+
+
+class Tag(Base):
+    """Tags RFID cadastradas pelo administrador (R16). Privilégios: ADR futuro."""
+
+    __tablename__ = "tags"
+
+    uid: Mapped[str] = mapped_column(String(20), primary_key=True)
+    apelido: Mapped[str] = mapped_column(String(64))
+    dono: Mapped[Optional[str]] = mapped_column(String(64))
+    criada_em: Mapped[datetime] = mapped_column(Momento)
 
 
 class Usuario(Base):
