@@ -8,6 +8,8 @@ set -eu
 : "${MQTT_DISPOSITIVO_PASSWORD:?defina no .env}"
 : "${MQTT_BACKEND_USER:?defina no .env}"
 : "${MQTT_BACKEND_PASSWORD:?defina no .env}"
+: "${MQTT_MOTORISTA_USER:?defina no .env}"
+: "${MQTT_MOTORISTA_PASSWORD:?defina no .env}"
 : "${MQTT_MONITOR_USER:?defina no .env}"
 : "${MQTT_MONITOR_PASSWORD:?defina no .env}"
 
@@ -19,6 +21,7 @@ touch "$senhas"
 chmod 0600 "$senhas"
 mosquitto_passwd -b "$senhas" "$MQTT_DISPOSITIVO_USER" "$MQTT_DISPOSITIVO_PASSWORD"
 mosquitto_passwd -b "$senhas" "$MQTT_BACKEND_USER" "$MQTT_BACKEND_PASSWORD"
+mosquitto_passwd -b "$senhas" "$MQTT_MOTORISTA_USER" "$MQTT_MOTORISTA_PASSWORD"
 mosquitto_passwd -b "$senhas" "$MQTT_MONITOR_USER" "$MQTT_MONITOR_PASSWORD"
 
 # O Mosquitto exige arquivos de senha e ACL legíveis só pelo dono

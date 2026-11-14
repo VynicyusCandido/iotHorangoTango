@@ -1,0 +1,9 @@
+# pytest --cov  (o SQLAlchemy assíncrono roda sobre greenlet; sem isso as
+# linhas depois de cada await de banco aparecem como não executadas)
+[run]
+source = comum, persistencia, operador, motorista
+concurrency = thread, greenlet
+
+[report]
+show_missing = true
+skip_empty = true

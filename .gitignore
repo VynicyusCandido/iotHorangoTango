@@ -6,3 +6,8 @@ secrets.h
 
 # Variáveis do docker compose (senhas)
 .env
+
+# Backend (Python)
+.venv/
+__pycache__/
+.pytest_cache/
