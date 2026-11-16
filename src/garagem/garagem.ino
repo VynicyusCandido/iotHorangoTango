@@ -25,9 +25,10 @@
 #error "Falta secrets.h: copie secrets.example.h para secrets.h e preencha WIFI_SSID e WIFI_PASSWORD"
 #endif
 
-// Broker: pode ser definido no secrets.h; senão, usa estes valores
+// Broker: definido no secrets.h. Sem padrão de propósito: um broker público
+// anônimo deixaria qualquer pessoa enviar comandos ao dispositivo (R9).
 #ifndef MQTT_HOST
-#define MQTT_HOST "broker.hivemq.com"
+#error "Falta MQTT_HOST no secrets.h (veja secrets.example.h). Para testes no Wokwi use broker.hivemq.com"
 #endif
 #ifndef MQTT_PORT
 #define MQTT_PORT 1883

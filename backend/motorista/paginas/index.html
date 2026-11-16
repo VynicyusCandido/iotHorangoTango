@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vagas Livres</title>
+<style>
+  :root {
+    --bg:#f4f5f7; --card:#fff; --text:#1d2330; --muted:#6b7280; --border:#e3e5ea;
+    --livre:#16a34a; --livre-bg:#e8f7ee; --ocupada:#dc2626; --ocupada-bg:#fdecec;
+    --reservada:#2563eb; --reservada-bg:#e8f0fe; --cinza-bg:#eceef2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#11141a; --card:#1a1f28; --text:#e8eaf0; --muted:#9aa1ad; --border:#2a303b;
+      --livre:#34d399; --livre-bg:#12291f; --ocupada:#f87171; --ocupada-bg:#2f1617;
+      --reservada:#60a5fa; --reservada-bg:#14223d; --cinza-bg:#232934;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width:560px; margin:0 auto; padding:20px 16px 40px; }
+  h1 { font-size:1.25rem; margin:0 0 4px; }
+  .muted { color:var(--muted); font-size:.85rem; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:18px; margin-top:16px; }
+  .resumo { text-align:center; }
+  .num { font-size:3.5rem; font-weight:700; color:var(--livre); line-height:1; }
+  .num.zero { color:var(--ocupada); }
+  .grade { display:grid; grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:12px; margin-top:16px; }
+  .vaga { border:2px solid var(--livre); background:var(--livre-bg); border-radius:12px; padding:12px; }
+  .vaga.ocupada { border-color:var(--ocupada); background:var(--ocupada-bg); }
+  .vaga.reservada { border-color:var(--reservada); background:var(--reservada-bg); }
+  .vaga.erro, .vaga.sem_dados { border-color:var(--muted); border-style:dashed; background:var(--cinza-bg); }
+  .vaga.minha { outline:4px solid var(--reservada); }
+  .vaga .estado { font-weight:700; text-transform:capitalize; }
+  #meuCarro { font-weight:600; margin-top:10px; min-height:1.4em; }
+  input { width:100%; margin-top:6px; padding:10px; border:1px solid var(--border); border-radius:8px;
+          background:var(--bg); color:var(--text); font:inherit; text-transform:uppercase; }
+  button { margin-top:10px; padding:10px 16px; border:0; border-radius:8px;
+           background:var(--text); color:var(--bg); font:inherit; cursor:pointer; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Vagas da garagem</h1>
+  <div id="conexao" class="muted">conectando…</div>
+
+  <section class="card resumo">
+    <div id="livres" class="num">–</div>
+    <div id="txtResumo" class="muted">aguardando dados</div>
+  </section>
+
+  <div id="vagas" class="grade"></div>
+
+  <section class="card">
+    <strong>Onde está meu carro?</strong>
+    <form id="formTag">
+      <label class="muted" for="uid">Código da sua tag (hexadecimal, ex.: 04A1B2C3)</label>
+      <input id="uid" inputmode="text" autocomplete="off" pattern="(?:[0-9A-Fa-f]{2}){4,10}" required>
+      <button type="submit">Procurar</button>
+    </form>
+    <div id="meuCarro" aria-live="polite"></div>
+  </section>
+</main>
+
+<script>
+  // API pública do motorista (mesma origem; OpenAPI em /docs). Só o agora.
+  const el = (id) => document.getElementById(id);
+  let uid = "", minha = null, ws = null, ultimoResumo = null;
+  try { uid = localStorage.getItem("uid") || ""; } catch (e) {}
+
+  const nome = (v) => (ultimoResumo && new Set(ultimoResumo.vagas.map((x) => x.deviceId)).size > 1
+    ? v.deviceId.slice(-6) + " · " : "") + "vaga " + v.vaga;
+  const ehMinha = (v) => minha && minha.deviceId === v.deviceId && minha.vaga === v.vaga;
+
+  function desenhar(r) {
+    ultimoResumo = r;
+    el("livres").textContent = r.total ? r.livres : "–";
+    el("livres").classList.toggle("zero", r.total > 0 && r.livres === 0);
+    el("txtResumo").textContent = r.total
+      ? `${r.livres === 1 ? "vaga livre" : "vagas livres"} de ${r.total}` : "nenhuma vaga recebida ainda";
+    el("vagas").replaceChildren(...r.vagas.map((v) => {
+      const d = document.createElement("div");
+      d.className = "vaga " + v.estado + (ehMinha(v) ? " minha" : "");
+      const n = document.createElement("div"); n.textContent = nome(v);
+      const e = document.createElement("div"); e.className = "estado";
+      e.textContent = v.estado === "sem_dados" ? "sem dados" : v.estado;
+      d.append(n, e);
+      if (ehMinha(v)) { const m = document.createElement("div"); m.className = "muted"; m.textContent = "seu carro"; d.append(m); }
+      return d;
+    }));
+  }
+
+  async function procurar() {
+    if (!uid) return;
+    try {
+      const r = await fetch("/api/minha-vaga/" + encodeURIComponent(uid));
+      minha = r.ok ? await r.json() : null;
+      el("meuCarro").textContent = r.ok ? "Seu carro está na " + nome(minha)
+        : r.status === 404 ? "Seu carro não está em nenhuma vaga." : "Código de tag inválido.";
+    } catch (e) { el("meuCarro").textContent = "Sem conexão com o servidor."; }
+    if (ultimoResumo) desenhar(ultimoResumo);
+  }
+
+  el("formTag").addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    uid = el("uid").value.trim().toUpperCase();
+    try { localStorage.setItem("uid", uid); } catch (e) {}
+    procurar();
+  });
+
+  function conectar() {
+    ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
+    ws.onopen = () => { el("conexao").textContent = "ao vivo"; };
+    ws.onmessage = (m) => {
+      const r = JSON.parse(m.data);
+      if (r.tipo === "vagas") { desenhar(r); procurar(); }
+    };
+    ws.onclose = () => { el("conexao").textContent = "reconectando…"; setTimeout(conectar, 3000); };
+  }
+
+  el("uid").value = uid;
+  conectar();
+</script>
+</body>
+</html>

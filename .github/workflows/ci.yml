@@ -1,0 +1,35 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  backend:
+    name: Testes do backend (pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest
+
+  firmware:
+    name: Compilar firmware (ESP32)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+      - name: Instalar core e bibliotecas
+        run: |
+          arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core install esp32:esp32 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli lib install "MFRC522" "MQTT" "ArduinoJson@7"
+      - name: Compilar
+        run: |
+          cp src/garagem/secrets.example.h src/garagem/secrets.h
+          arduino-cli compile --fqbn esp32:esp32:esp32 src/garagem

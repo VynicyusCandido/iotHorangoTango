@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HorangoTango Park — Painel</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg:#f4f5f7; --card:#fff; --text:#1d2330; --muted:#6b7280; --border:#e3e5ea;
+    --livre:#16a34a; --livre-bg:#e8f7ee; --ocupada:#dc2626; --ocupada-bg:#fdecec;
+    --reservada:#2563eb; --reservada-bg:#e8f0fe; --cinza-bg:#eceef2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#11141a; --card:#1a1f28; --text:#e8eaf0; --muted:#9aa1ad; --border:#2a303b;
+      --livre:#34d399; --livre-bg:#12291f; --ocupada:#f87171; --ocupada-bg:#2f1617;
+      --reservada:#60a5fa; --reservada-bg:#14223d; --cinza-bg:#232934;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width:900px; margin:0 auto; padding:20px 16px 40px; }
+  header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  h1 { font-size:1.25rem; margin:0; }
+  h2 { font-size:1rem; margin:28px 0 10px; }
+  .muted { color:var(--muted); font-size:.85rem; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:14px 16px; }
+  .grade { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:12px; }
+  .vaga { border:2px solid var(--livre); background:var(--livre-bg); border-radius:12px; padding:14px; }
+  .vaga.ocupada { border-color:var(--ocupada); background:var(--ocupada-bg); }
+  .vaga.reservada { border-color:var(--reservada); background:var(--reservada-bg); }
+  .vaga.erro, .vaga.sem_dados { border-color:var(--muted); border-style:dashed; background:var(--cinza-bg); }
+  .vaga .estado { font-size:1.1rem; font-weight:700; margin:4px 0; }
+  ul { list-style:none; margin:0; padding:0; }
+  li { padding:6px 0; border-bottom:1px solid var(--border); font-size:.9rem; }
+  li:last-child { border-bottom:0; }
+  form label { display:block; margin-top:10px; font-size:.85rem; color:var(--muted); }
+  input, select { width:100%; margin-top:4px; padding:8px 10px; border:1px solid var(--border);
+          border-radius:8px; background:var(--bg); color:var(--text); font:inherit; }
+  button { margin-top:10px; padding:8px 16px; border:0; border-radius:8px;
+           background:var(--text); color:var(--bg); font:inherit; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  .graficos { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:12px; }
+  .graficos .card { height:260px; position:relative; }
+  #erro { color:var(--ocupada); min-height:1.2em; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <!-- Login -->
+  <section id="telaLogin" class="card" style="max-width:360px;margin:60px auto" hidden>
+    <h1>HorangoTango Park</h1>
+    <form id="formLogin">
+      <label>Usuário <input id="usuario" autocomplete="username" required></label>
+      <label>Senha <input id="senha" type="password" autocomplete="current-password" required></label>
+      <button type="submit">Entrar</button>
+      <p id="erro" role="alert"></p>
+    </form>
+  </section>
+
+  <!-- Painel -->
+  <section id="telaPainel" hidden>
+    <header>
+      <h1>Painel do operador</h1>
+      <span><span id="perfil" class="muted"></span> <button id="btnSair" style="margin:0 0 0 8px;padding:4px 10px">Sair</button></span>
+    </header>
+    <p id="conexao" class="muted"></p>
+
+    <h2>Vagas</h2>
+    <div id="vagas" class="grade"></div>
+    <p id="andamento" class="muted" aria-live="polite"></p>
+
+    <h2>Dispositivos</h2>
+    <div class="card"><ul id="dispositivos"></ul></div>
+
+    <h2>Alertas ativos</h2>
+    <div class="card"><ul id="alertas"></ul></div>
+
+    <h2>Tags lidas</h2>
+    <div class="card"><ul id="tags"></ul></div>
+
+    <h2>Gráficos (últimos 7 dias)</h2>
+    <p id="semGraficos" class="muted" hidden>Biblioteca de gráficos indisponível (sem internet?).</p>
+    <div class="graficos">
+      <div class="card"><canvas id="gOcupacao"></canvas></div>
+      <div class="card"><canvas id="gPermanencia"></canvas></div>
+      <div class="card"><canvas id="gUptime"></canvas></div>
+      <div class="card"><canvas id="gErro"></canvas></div>
+    </div>
+
+    <div id="blocoConfig" hidden>
+      <h2>Configuração do dispositivo</h2>
+      <form id="formConfig" class="card">
+        <label>Dispositivo <select id="cfgDisp"></select></label>
+        <label>Limiar de ocupada (cm, 2–200) <input id="cfgOcupa" type="number" step="0.1" required></label>
+        <label>Limiar de livre (cm, maior que ocupada + 2, até 400) <input id="cfgLibera" type="number" step="0.1" required></label>
+        <label>Tempo de reserva (min, 1–60) <input id="cfgReserva" type="number" step="1" required></label>
+        <button type="submit">Aplicar</button>
+      </form>
+    </div>
+  </section>
+</main>
+
+<script>
+  // Fala só com a API do operador (mesma origem; OpenAPI em /docs). Sem MQTT no navegador.
+  const API = "/api";
+  const el = (id) => document.getElementById(id);
+  let token = null, perfil = null, timer = null, ocupado = false;
+
+  try { token = sessionStorage.getItem("token"); perfil = sessionStorage.getItem("perfil"); } catch (e) {}
+
+  // Texto vindo de dispositivos/banco nunca entra como HTML
+  function lista(ul, itens, vazio) {
+    ul.replaceChildren(...(itens.length ? itens : [vazio]).map((t) => {
+      const li = document.createElement("li");
+      li.textContent = t;
+      return li;
+    }));
+  }
+  const hora = (iso) => (iso ? new Date(iso).toLocaleString("pt-BR") : "nunca");
+  const nomeVaga = (v) => `${v.device_id.slice(-6)} · vaga ${v.vaga}`;
+
+  async function api(caminho, opcoes = {}) {
+    const r = await fetch(API + caminho, {
+      ...opcoes,
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: "Bearer " + token } : {}) },
+    });
+    const corpo = await r.json().catch(() => ({}));
+    // Login errado também é 401: só expira a sessão se havia token
+    if (r.status === 401 && token) { sair(); throw new Error("Sessão expirada"); }
+    if (!r.ok) {
+      const d = corpo.detail;  // FastAPI: texto, ou lista de erros de validação (422)
+      throw new Error(Array.isArray(d) ? d.map((x) => x.msg).join("; ") : d || "Erro " + r.status);
+    }
+    return corpo;
+  }
+
+  function mostrar(logado) {
+    el("telaLogin").hidden = logado;
+    el("telaPainel").hidden = !logado;
+    el("blocoConfig").hidden = !(logado && perfil === "administrador");
+    el("perfil").textContent = perfil || "";
+  }
+
+  function sair() {
+    token = perfil = null;
+    try { sessionStorage.clear(); } catch (e) {}
+    clearInterval(timer);
+    mostrar(false);
+  }
+
+  el("formLogin").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    el("erro").textContent = "";
+    try {
+      const r = await api("/login", { method: "POST",
+        body: JSON.stringify({ usuario: el("usuario").value, senha: el("senha").value }) });
+      token = r.access_token; perfil = r.perfil;
+      try { sessionStorage.setItem("token", token); sessionStorage.setItem("perfil", perfil); } catch (e) {}
+      el("senha").value = "";
+      iniciar();
+    } catch (e) { el("erro").textContent = e.message; }
+  });
+  el("btnSair").addEventListener("click", sair);
+
+  // ---- Vagas ----
+  function cartaoVaga(v) {
+    const estado = v.online ? (v.estado || "sem_dados") : "sem_dados";
+    const d = document.createElement("div");
+    d.className = "vaga " + estado;
+    const nome = document.createElement("strong"); nome.textContent = nomeVaga(v);
+    const est = document.createElement("div"); est.className = "estado";
+    est.textContent = estado === "sem_dados" ? (v.online ? "sem leitura" : "dispositivo offline") : estado;
+    const info = document.createElement("div"); info.className = "muted";
+    info.textContent = (v.distancia_cm != null ? v.distancia_cm.toFixed(1) + " cm" : "sem distância")
+      + " · desde " + hora(v.desde);
+    d.append(nome, est, info);
+    // Só o administrador vê os botões (o backend confere o perfil de novo, V4/R16)
+    if (perfil === "administrador" && (estado === "livre" || estado === "reservada")) {
+      const b = document.createElement("button");
+      b.textContent = estado === "livre" ? "Reservar" : "Cancelar reserva";
+      b.addEventListener("click", () => enviar(
+        { acao: estado === "livre" ? "reservar" : "cancelar_reserva", device_id: v.device_id, vaga: v.vaga }, b));
+      d.append(b);
+    }
+    return d;
+  }
+
+  // ---- Comando com andamento: enviado -> aceito -> executado -> confirmado ----
+  // "configurar" não gera estado novo, então termina em "executado".
+  const fim = (c, acao) => ["confirmado", "rejeitado", "falha_envio"].includes(c.status)
+    || (acao === "configurar" && c.status === "executado");
+  async function enviar(cmd, botao) {
+    if (botao) botao.disabled = true;
+    const msg = el("andamento");
+    try {
+      let c = await api("/comandos", { method: "POST", body: JSON.stringify(cmd) });
+      for (let i = 0; i < 20; i++) {
+        msg.textContent = `Comando ${cmd.acao}: ${c.status}` + (c.erro ? " (" + c.erro + ")" : "");
+        if (fim(c, cmd.acao)) break;
+        await new Promise((r) => setTimeout(r, 1000));
+        c = await api("/comandos/" + encodeURIComponent(c.command_id));
+      }
+      if (!fim(c, cmd.acao)) msg.textContent = `Comando ${cmd.acao}: sem confirmação (último: ${c.status})`;
+    } catch (e) { msg.textContent = "Comando falhou: " + e.message; }
+    if (botao) botao.disabled = false;
+    atualizar();
+  }
+
+  el("formConfig").addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    const ocupa = Number(el("cfgOcupa").value), libera = Number(el("cfgLibera").value),
+          reserva = Number(el("cfgReserva").value);
+    // Mesmas faixas do contrato v1; backend e dispositivo validam de novo
+    if (!(ocupa >= 2 && ocupa <= 200 && libera > ocupa + 2 && libera <= 400 &&
+          Number.isInteger(reserva) && reserva >= 1 && reserva <= 60)) {
+      el("andamento").textContent = "Valores fora das faixas permitidas";
+      return;
+    }
+    enviar({ acao: "configurar", device_id: el("cfgDisp").value, limiar_ocupa_cm: ocupa,
+             limiar_libera_cm: libera, duracao_reserva_min: reserva }, ev.submitter);
+  });
+
+  // ---- Gráficos (R14) ----
+  const graficos = {};
+  function grafico(id, tipo, rotulos, dados, titulo, cor) {
+    if (typeof Chart === "undefined") { el("semGraficos").hidden = false; return; }
+    if (graficos[id]) {  // atualiza no lugar, sem recriar o canvas
+      graficos[id].data.labels = rotulos;
+      graficos[id].data.datasets[0].data = dados;
+      graficos[id].update();
+      return;
+    }
+    graficos[id] = new Chart(el(id), {
+      type: tipo,
+      data: { labels: rotulos, datasets: [{ label: titulo, data: dados, backgroundColor: cor, borderColor: cor }] },
+      options: { maintainAspectRatio: false, plugins: { title: { display: true, text: titulo }, legend: { display: false } },
+                 scales: { y: { beginAtZero: true } } },
+    });
+  }
+  async function atualizarGraficos() {
+    const e = await api("/estatisticas");
+    const nomes = e.vagas.map(nomeVaga);
+    // Ocupação média das vagas, por hora local do dia (valor nulo = sem dados naquela hora)
+    const horas = [...Array(24).keys()];
+    const media = horas.map((h) => {
+      const v = e.vagas.map((x) => x.ocupacao_por_hora[h]).filter((x) => x != null);
+      return v.length ? Math.round(100 * v.reduce((a, b) => a + b, 0) / v.length) : null;
+    });
+    grafico("gOcupacao", "bar", horas.map((h) => h + "h"), media, "Ocupação por hora do dia (%)", "#2563eb");
+    grafico("gPermanencia", "bar", nomes, e.vagas.map((x) => x.permanencia_media_min), "Permanência média (min)", "#16a34a");
+    grafico("gUptime", "bar", e.dispositivos.map((d) => d.device_id.slice(-6)),
+            e.dispositivos.map((d) => (d.uptime == null ? null : Math.round(1000 * d.uptime) / 10)),
+            "Uptime do dispositivo (%)", "#d97706");
+    grafico("gErro", "bar", nomes, e.vagas.map((x) => x.tempo_em_erro_min), "Tempo em erro (min)", "#dc2626");
+  }
+
+  // ---- Atualização periódica ----
+  async function atualizar() {
+    if (ocupado) return;  // não empilha chamadas se a API estiver lenta
+    ocupado = true;
+    try {
+      const [vagas, disp, alertas, rfid] = await Promise.all([
+        api("/vagas"), api("/dispositivos"), api("/alertas?ativos=true"), api("/rfid?limite=20")]);
+      el("vagas").replaceChildren(...vagas.map(cartaoVaga));
+      lista(el("dispositivos"), disp.map((d) =>
+        `${d.device_id} (fw ${d.firmware || "?"}): ${d.online ? "online" : "offline"} · último contato ${hora(d.ultimo_contato)}`),
+        "Nenhum dispositivo");
+      if (perfil === "administrador") {
+        const atual = el("cfgDisp").value;
+        el("cfgDisp").replaceChildren(...disp.map((d) => new Option(d.device_id, d.device_id)));
+        if (atual) el("cfgDisp").value = atual;
+      }
+      lista(el("alertas"), alertas.map((a) => `${hora(a.criado_em)} — ${a.mensagem}`), "Sem alertas");
+      lista(el("tags"), rfid.map((t) =>
+        `${hora(t.ts)} — ${t.apelido || "tag " + t.uid} (${t.device_id.slice(-6)}, vaga ${t.vaga})`), "Nenhuma tag lida");
+      el("conexao").textContent = "Atualizado às " + new Date().toLocaleTimeString("pt-BR");
+      await atualizarGraficos();
+    } catch (e) { el("conexao").textContent = "Sem resposta da API: " + e.message; }
+    ocupado = false;
+  }
+
+  function iniciar() {
+    mostrar(true);
+    atualizar();
+    clearInterval(timer);
+    timer = setInterval(atualizar, 5000);
+  }
+
+  token ? iniciar() : mostrar(false);
+</script>
+</body>
+</html>
