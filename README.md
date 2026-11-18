@@ -147,8 +147,15 @@ RC522   ×2 ─┤ RFID ─────────┼─► fila de eventos ─
 LED RGB ×2 ◄┤ LEDs ◄────────┘  (regra local, sem rede)              │  │
             └───────────────────────────────────────────────────────┘  │
                                                                        ▼
-                                                  Servidor: Mosquitto ──► backend (N3)
+                     Servidor: Mosquitto ──┬──► persistencia ──► PostgreSQL
+                                           ├──► operador  (API :8000) ──► painel
+                                           │      └─ publica cmd
+                                           └──► motorista (API :8001) ──► app do celular
 ```
+
+O backend são **três assinantes** do broker, um para cada uso dos dados
+([ADR 0005](docs/adr/0005-backend-tres-assinantes.md)); ver
+[Backend](#backend-três-assinantes).
 
 Tópicos (`{id}` = `deviceId`, ex.: `esp32-garagem-240ac4000110`, derivado
 do MAC). Payloads completos em [CONTRATOS.md](CONTRATOS.md).
@@ -175,7 +182,8 @@ Exemplo (`garagem/v1/esp32-garagem-240ac4000110/rfid`):
 - **Painel da N1 (`app/index.html`):** ainda lê os tópicos antigos
   (`garagem/vaga/N`) e **não mostra os dados do firmware v1**. Será
   substituído pelo painel servido pelo backend.
-- **App do motorista:** em desenvolvimento
+- **App do motorista:** API pronta (assinante `motorista`); interface em
+  desenvolvimento
 
 Fluxogramas do firmware em
 [docs/fluxograma-firmware.md](docs/fluxograma-firmware.md).
@@ -216,8 +224,8 @@ Fluxogramas do firmware em
   - `WiFi` e `SPI` (nativas do ESP32)
 - No Windows, se a porta COM não aparecer, instale o driver CP210x da
   Silicon Labs
-- Servidor: Docker com `docker compose` (broker Mosquitto 2.1.2; backend
-  e banco nas próximas etapas)
+- Servidor: Docker com `docker compose` (Mosquitto 2.1.2, PostgreSQL 16
+  e o backend em Python 3.12 / FastAPI)
 
 ## Como executar
 
@@ -336,13 +344,15 @@ no servidor. Sem `.env` configurado, o firmware usa o broker **público**
 
 O que o broker faz (`broker/`):
 
-- **Usuário e senha obrigatórios** (`allow_anonymous false`). São três
+- **Usuário e senha obrigatórios** (`allow_anonymous false`). São cinco
   usuários, definidos no `.env`:
 
   | Usuário (padrão) | Quem usa | Pode |
   |---|---|---|
   | `dispositivo` | ESP32 | publicar estado, RFID, telemetria, `ack` e `status` **só no próprio** `garagem/v1/<deviceId>/`; ler o próprio `cmd` |
-  | `backend` | backend (N3) | ler `garagem/v1/#`; único que publica `cmd` |
+  | `backend` | assinante `operador` | ler `garagem/v1/#`; único que publica `cmd` |
+  | `persistencia` | assinante `persistencia` | só ler `garagem/v1/#` |
+  | `motorista` | assinante `motorista` | só ler estado das vagas, `status` e `rfid` |
   | `monitor` | equipe (testes) | só ler `garagem/#` |
 
 - **ACL** em `broker/acl`: cada ESP32 só mexe no próprio prefixo (o
@@ -370,8 +380,8 @@ no Linux, `brew install mosquitto` no macOS ou o instalador de
 Na raiz do repositório:
 
 ```bash
-cp .env.example .env     # troque as três senhas no .env
-docker compose up -d
+cp .env.example .env     # troque todas as senhas e o JWT_SEGREDO no .env
+docker compose up -d --build       # broker, banco e os três assinantes do backend
 docker compose logs -f mosquitto   # Ctrl+C para sair dos logs
 ```
 
@@ -473,6 +483,154 @@ No `secrets.h`, use a rede real, o IP do servidor e o usuário
 Para rodar de novo no Wokwi, remova `MQTT_HOST`, `MQTT_USER` e
 `MQTT_PASSWORD` do `secrets.h` (volta ao `broker.hivemq.com`) e use o
 Wi-Fi `Wokwi-GUEST` (senha vazia).
+
+## Backend (três assinantes)
+
+Tudo o que roda no servidor é o backend (`backend/`, Python 3.12 +
+FastAPI + aiomqtt). Ele são **três assinantes** do broker, um para cada
+uso dos dados, todos na mesma imagem e validando as mensagens com o
+mesmo contrato ([ADR 0005](docs/adr/0005-backend-tres-assinantes.md)):
+
+| Serviço | Para quem | Assina | O que faz |
+|---|---|---|---|
+| `persistencia` | banco de dados | `garagem/v1/#` | Valida cada mensagem e grava no PostgreSQL: estados, medições, RFID, status, andamento dos comandos. Inválidas vão para `mensagens_invalidas` com o motivo. |
+| `operador` | painel do operador | `garagem/v1/#` | API com login (JWT) e perfis, histórico, estatísticas, tags, envio de comandos (único que publica `cmd`) e eventos ao vivo por WebSocket. Roda as regras remotas e os alertas (Telegram). Porta **8000**. |
+| `motorista` | app do motorista | estado, `status`, `rfid` | API pública: vagas livres, onde está o carro (pela tag) e atualização ao vivo. Não usa o banco. Porta **8001**. |
+
+`docker compose up -d --build` sobe tudo: antes dos assinantes, o
+serviço `migracoes` cria as tabelas (Alembic) e termina. O operador
+**não sobe** com o `JWT_SEGREDO` do `.env.example`: gere um com
+`python -c "import secrets; print(secrets.token_urlsafe(48))"`.
+
+**Documentação das APIs (OpenAPI):** `http://<IP>:8000/docs` (operador) e
+`http://<IP>:8001/docs` (motorista).
+
+### Sem a maquete: ESP32 simulado
+
+`docker compose --profile simulador up -d` sobe também um ESP32 simulado
+(`esp32-garagem-simulado01`, vagas 1 e 2) que publica no contrato v1 com
+o usuário `dispositivo`: carros chegando e saindo (com e sem tag),
+telemetria a cada 10 s e Last Will. Ele responde aos comandos como o
+firmware (mesmos códigos de erro, reserva com prazo). Fora do Docker,
+dentro de `backend/`:
+`python -m simulador --host <IP> --usuario dispositivo --senha <senha>`
+(`--help` mostra as opções).
+
+### API do operador (porta 8000)
+
+Na primeira subida é criado o administrador do `.env` (`ADMIN_USUARIO` /
+`ADMIN_SENHA`); troque a senha depois com `POST /api/eu/senha`. Perfis:
+**operador** (consulta) e **administrador** (também envia comandos e
+gerencia usuários e tags). O perfil e o acesso são conferidos no banco a
+cada requisição. Após 5 senhas erradas, o login fica bloqueado por 5 min
+para aquele IP e usuário.
+
+| Rota | Perfil | O que faz |
+|---|---|---|
+| `POST /api/login` | — | `{"usuario", "senha"}` → `access_token` (vale 8 h) |
+| `GET /api/eu` · `POST /api/eu/senha` | todos | quem sou eu · trocar a própria senha |
+| `GET /api/vagas` | todos | estado atual de cada vaga e se o dispositivo está online |
+| `GET /api/dispositivos` | todos | firmware, vagas, online/offline, último contato |
+| `GET /api/historico/estados` | todos | mudanças de estado (`device_id`, `vaga`, `desde`, `ate`, `limite`) |
+| `GET /api/medicoes` | todos | distâncias e RSSI da telemetria |
+| `GET /api/rfid` | todos | tags lidas (com o `apelido`, se cadastrada) |
+| `GET /api/estatisticas` | todos | gráficos (R14): ocupação por hora do dia, permanência média, tempo em erro, uptime (`desde`, `ate`, `fuso`; padrão: últimos 7 dias) |
+| `GET /api/alertas` · `POST /api/alertas/{id}/resolver` | todos | alertas ativos · marcar como resolvido |
+| `GET /api/comandos[/{commandId}]` | todos | comandos e o andamento |
+| `POST /api/comandos` | administrador | `reservar`, `cancelar_reserva` ou `configurar` |
+| `GET /api/tags` · `POST /api/tags` · `DELETE /api/tags/{uid}` | todos · admin · admin | tags RFID cadastradas (R16) |
+| `GET/POST /api/usuarios` · `DELETE /api/usuarios/{nome}` | administrador | usuários |
+| `WS /ws?token=<token>` | todos | eventos do dispositivo e alertas ao vivo |
+
+O andamento de um comando é `enviado` → `aceito` (ou `rejeitado`, com o
+`erro`) → `executado` → `confirmado` (o estado `reservada` chegou). Com o
+dispositivo offline o comando é recusado (409), porque o ESP32 não
+recebe comandos atrasados; com o broker fora fica `falha_envio` (503).
+
+```bash
+TOKEN=$(curl -s -X POST http://<IP>:8000/api/login -H 'Content-Type: application/json' \
+  -d '{"usuario":"admin","senha":"<ADMIN_SENHA>"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+
+curl -s -X POST http://<IP>:8000/api/comandos -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"acao":"reservar","device_id":"<deviceId>","vaga":1,"duracao_min":2}'
+```
+
+### Regras remotas e alertas (R8, R15)
+
+O operador verifica a cada 15 s e gera um alerta (no painel, pelo
+WebSocket, e no Telegram) quando:
+
+- o sensor de uma vaga está em `erro` há mais de 1 min;
+- o dispositivo está `offline` há mais de 1 min;
+- uma reserva venceu sem o carro chegar. O prazo é o `duracao_min` do
+  comando ou a duração configurada (salva no banco quando um
+  `configurar` é executado), mais 30 s de folga. Se a vaga ainda estiver
+  `reservada`, o backend envia `cancelar_reserva` (origem `regra`, mesmo
+  ciclo do R7).
+
+Erro e offline se resolvem sozinhos quando a situação acaba. Para o
+Telegram, crie um bot com o @BotFather e preencha `TELEGRAM_TOKEN` e
+`TELEGRAM_CHAT_ID` no `.env`; vazio, os alertas ficam só no painel. Se o
+Telegram estiver fora, o envio é tentado de novo no ciclo seguinte.
+
+### API do motorista (porta 8001)
+
+Pública, sem login. Não mostra distâncias nem tags de outros carros.
+
+| Rota | O que faz |
+|---|---|
+| `GET /api/vagas` | `livres`, `total` e cada vaga (`livre`, `ocupada`, `reservada`, `erro` ou `sem_dados` com o ESP32 offline) |
+| `GET /api/minha-vaga/{uid}` | vaga ocupada onde a tag foi lida por último (404 se o carro não está em nenhuma) |
+| `WS /ws` | resumo das vagas ao conectar e a cada mudança |
+
+### Painel e app: como as páginas chegam ao navegador
+
+Duas opções, que valem para os dois serviços:
+
+- **Servidas pelo próprio backend** (como prevê o CP12): coloque os
+  arquivos em `backend/operador/paginas/` (painel) e
+  `backend/motorista/paginas/` (app), com um `index.html`. Eles ficam na
+  raiz (`http://<IP>:8000/` e `http://<IP>:8001/`) e chamam a API no
+  mesmo endereço, sem CORS. Depois, `docker compose up -d --build`.
+- **Abertas de outro endereço** (ex.: Live Server durante o
+  desenvolvimento): liste as origens em `CORS_ORIGENS` no `.env`
+  (ex.: `http://localhost:5500`).
+
+### Testes do backend
+
+Rodam sem Docker, broker ou Postgres (SQLite temporário):
+
+```bash
+cd backend
+python -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt     # Windows: .venv\Scripts\pip
+.venv/bin/python -m pytest                        # Windows: .venv\Scripts\python
+```
+
+Para ver a cobertura: `python -m pytest --cov` (cerca de 92%; o que fica
+de fora é a conexão de rede, verificada com o compose).
+
+| Arquivo | O que verifica |
+|---|---|
+| `test_contrato.py` | exemplos do `CONTRATOS.md` aceitos; desvios (tipo errado, campo a mais, `ts` sem fuso, vaga ≠ tópico...) recusados com motivo |
+| `test_persistencia*.py` | o que vai para cada tabela; retidos e republicações sem duplicar; duas mudanças no mesmo segundo; ciclo do comando em qualquer ordem de `ack`/estado; `COMANDO_DUPLICADO`; `"ts": null` estimado (inclusive após reinício do ESP32) |
+| `test_operador*.py` | login, token vencido/forjado, perfis, bloqueio após 5 erros, segredo fraco recusado; usuários e tags; filtros; comandos inválidos não publicados; ciclo completo com a persistência; WebSocket; CORS e páginas |
+| `test_regras.py` | alertas de offline e de erro (só depois de 1 min, sem repetir, resolvidos ao voltar); reserva vencida (cancelada pelo backend, expirada no ESP32, carro chegou, cancelada pelo operador, prazo do banco); Telegram fora e de volta |
+| `test_estatisticas.py` | intervalos, ocupação por hora no fuso local, permanência, tempo em erro, uptime e a rota |
+| `test_simulador.py` | tudo o que o simulador publica passa no contrato; respostas iguais às do firmware (ordem, códigos de erro, intertravamento, expiração) |
+| `test_motorista*.py` | contagem de livres, `sem_dados` com o ESP32 offline, "minha vaga" pela tag, sem vazar tags nem distâncias, WebSocket só avisa quando muda |
+| `test_comum.py` | reconexão ao broker, erro ao tratar uma mensagem não para o assinante, navegador lento não trava os outros |
+
+### Consultar o banco
+
+```bash
+docker compose exec postgres psql -U horangotango -d horangotango
+# \dt  lista as tabelas;  select * from estados_vaga order by ts desc limit 10;
+```
+
+Se a porta 5432 já estiver em uso na máquina (outro Postgres), defina
+`POSTGRES_PORTA=5434` (ou outra livre) no `.env`.
 
 ## Painel de configuração e monitoramento
 
@@ -580,7 +738,9 @@ O projeto pode ser executado sem hardware físico no simulador
 │   │   ├── 0001-rfid-e-app-motorista.md  # Decisão: RFID + ultrassônico, ESP32 único, app do motorista
 │   │   ├── 0002-troca-sensor-de-peso-por-garagem.md
 │   │   ├── 0003-firmware-v1-fila-de-eventos.md  # Contrato v1, fila de eventos offline, leitor sob o piso
-│   │   └── 0004-comandos-reserva-e-nvs.md       # Comandos, reserva com LED azul, configuração em NVS
+│   │   ├── 0004-comandos-reserva-e-nvs.md       # Comandos, reserva com LED azul, configuração em NVS
+│   │   ├── 0005-backend-tres-assinantes.md      # Backend: persistência, operador e motorista
+│   │   └── 0006-mqtt-sem-tls-na-rede-local.md   # Justificativa de não usar TLS no MQTT (R16)
 │   ├── fluxograma-firmware.md   # Fluxogramas do firmware e dos subscribers
 │   ├── mapa-de-pinos.md         # Ligações do ESP32
 │   └── IOT_24_08.pdf            # Documentação da disciplina
@@ -589,13 +749,23 @@ O projeto pode ser executado sem hardware físico no simulador
 │       ├── garagem.ino          # Firmware único (HC-SR04 + RC522 + LED RGB)
 │       ├── tipos.h              # Tipos do firmware (estado, evento da fila)
 │       └── secrets.example.h    # Modelo do Wi-Fi (copiar para secrets.h)
-├── .gitignore                   # Ignora os secrets.h e o .env
+├── backend/                     # Os três assinantes do backend (ADR 0005)
+│   ├── comum/                   # Contrato v1 (Pydantic), tabelas, cliente MQTT
+│   ├── persistencia/            # Assinante 1: grava no PostgreSQL
+│   ├── operador/                # Assinante 2: API do painel (login, comandos, regras, alertas)
+│   ├── motorista/               # Assinante 3: API do app do motorista
+│   ├── simulador/               # ESP32 simulado (desenvolver sem a maquete)
+│   ├── migracoes/               # Alembic (tabelas do banco)
+│   ├── tests/                   # pytest
+│   └── Dockerfile
+├── .gitignore                   # Ignora os secrets.h, o .env e o .venv
 ├── broker/
 │   ├── mosquitto.conf           # Configuração do broker (Mosquitto 2.1)
 │   ├── acl                      # Quem pode publicar/assinar o quê
 │   └── iniciar.sh               # Gera as senhas a partir do .env e sobe o broker
-├── compose.yaml                 # docker compose: broker (backend e banco nas próximas etapas)
-├── .env.example                 # Modelo das senhas do broker (copiar para .env)
+├── compose.yaml                 # docker compose: broker, banco e backend
+├── .env.example                 # Modelo das senhas e portas (copiar para .env)
+├── CONTRATOS.md                 # Contrato MQTT v1
 └── README.md                    # Este arquivo
 ```
 
@@ -610,6 +780,10 @@ Arduino IDE exige. Para abrir, use **Arquivo → Abrir** e escolha
 - [x] Identificação de carros por RFID (firmware)
 - [x] Firmware no contrato MQTT v1 (JSON, QoS 1, NTP, fila de eventos offline, LED com regra local)
 - [x] Reserva de vaga, comandos (`cmd` / `ack`) e configuração em NVS
+- [x] Backend com três assinantes: persistência no PostgreSQL, API do
+  operador (login, perfis, comandos) e API do motorista
+- [x] Regra remota de expiração, alertas e Telegram (R8, R15)
+- [x] Simulador do ESP32, estatísticas para os gráficos, tags e usuários
 - [ ] Exibir tags RFID no painel
 - [ ] App do motorista
 - [ ] Definir privilégios dos carros com tag (ADR futuro)

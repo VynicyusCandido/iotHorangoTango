@@ -1,0 +1,7 @@
+# Arquivos lidos dentro dos containers Linux: sempre LF, mesmo com
+# core.autocrlf=true no Windows (CRLF quebra o iniciar.sh do broker)
+*.sh            text eol=lf
+broker/*        text eol=lf
+compose.yaml    text eol=lf
+.env.example    text eol=lf
+backend/**      text=auto eol=lf

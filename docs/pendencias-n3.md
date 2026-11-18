@@ -14,9 +14,8 @@ README executável e defesa). Requisitos (R1–R18) e proposta em
 - Broker Mosquitto 2.1.2 no Docker Compose, com usuário/senha e ACL
   (usuários `dispositivo`, `backend` e `monitor`).
 
-> **Pré-requisito:** os PRs #10 (broker) e #11 (comandos) foram
-> mesclados nas branches de base, não na `main`. Falta um PR de
-> `feat/broker-v1` para `main` (responsável: Luis) antes de começar.
+> **Pré-requisito (resolvido):** os PRs #10 (broker) e #11 (comandos)
+> chegaram à `main` pelo PR #13.
 
 ## Gustavo — hardware, bancada e OTA
 
@@ -43,6 +42,15 @@ README executável e defesa). Requisitos (R1–R18) e proposta em
 | J9 | Regra remota: reserva sem o carro chegar no tempo → `cancelar_reserva` com o ciclo do J6 + alerta; sensor em `erro` ou dispositivo `offline` por mais de 1 min → alerta | R8 | 24/11 |
 | J10 | Telegram: bot avisa sensor em erro, dispositivo offline > 1 min e reserva expirada | R15 | 24/11 |
 | J11 | `pytest`: validação do contrato (válidos e inválidos), ciclo de comando e regra de expiração | R18 | 24/11 |
+
+**Situação em 14/11:** J1–J11 feitos no PR #14 e validados com
+`docker compose --profile simulador up` (Postgres, broker com ACL e o
+ESP32 simulado). O simulador ficou em `backend/simulador`
+(`python -m simulador`), não em `tools/`, para reaproveitar o contrato e
+rodar no compose. Também entraram: estatísticas para os gráficos (V2),
+cadastro de tags, gestão de usuários e as páginas servidas pelo backend
+ou por CORS (ver README, seção Backend). A justificativa do TLS está no
+[ADR 0006](adr/0006-mqtt-sem-tls-na-rede-local.md).
 
 ## Vynicyus — interface, testes de falha e entrega
 

@@ -1,6 +1,11 @@
 # HorangoTango Park — serviços do servidor.
-# Uso: cp .env.example .env (e troque as senhas); docker compose up -d
-# Backend (FastAPI) e banco (PostgreSQL) entram aqui nas próximas etapas.
+# Uso: cp .env.example .env (e troque as senhas); docker compose up -d --build
+#
+# Backend = três assinantes do broker (ADR 0005), mesma imagem (./backend):
+#   persistencia  grava tudo no PostgreSQL
+#   operador      API + tempo real do painel; único que publica comandos;
+#                 regras remotas, alertas e Telegram
+#   motorista     API + tempo real do app do motorista
 services:
   mosquitto:
     image: eclipse-mosquitto:2.1.2-alpine
@@ -11,6 +16,10 @@ services:
       MQTT_DISPOSITIVO_PASSWORD: ${MQTT_DISPOSITIVO_PASSWORD:?defina no .env}
       MQTT_BACKEND_USER: ${MQTT_BACKEND_USER:?defina no .env}
       MQTT_BACKEND_PASSWORD: ${MQTT_BACKEND_PASSWORD:?defina no .env}
+      MQTT_PERSISTENCIA_USER: ${MQTT_PERSISTENCIA_USER:?defina no .env}
+      MQTT_PERSISTENCIA_PASSWORD: ${MQTT_PERSISTENCIA_PASSWORD:?defina no .env}
+      MQTT_MOTORISTA_USER: ${MQTT_MOTORISTA_USER:?defina no .env}
+      MQTT_MOTORISTA_PASSWORD: ${MQTT_MOTORISTA_PASSWORD:?defina no .env}
       MQTT_MONITOR_USER: ${MQTT_MONITOR_USER:?defina no .env}
       MQTT_MONITOR_PASSWORD: ${MQTT_MONITOR_PASSWORD:?defina no .env}
     ports:
@@ -27,6 +36,102 @@ services:
       timeout: 20s
       retries: 3
       start_period: 10s
+      start_interval: 2s
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?defina no .env}
+      POSTGRES_USER: ${POSTGRES_USER:?defina no .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina no .env}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORTA:-5432}:5432"  # só nesta máquina (psql para consulta)
+    volumes:
+      - postgres-dados:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+      start_interval: 1s
+
+  # Aplica as migrações (Alembic) e termina; os assinantes esperam por ele
+  migracoes:
+    image: horangotango-backend
+    build: ./backend
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: &banco postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  persistencia:
+    image: horangotango-backend
+    restart: unless-stopped
+    command: ["python", "-m", "persistencia"]
+    environment:
+      DATABASE_URL: *banco
+      MQTT_HOST: mosquitto
+      MQTT_USER: ${MQTT_PERSISTENCIA_USER}
+      MQTT_PASSWORD: ${MQTT_PERSISTENCIA_PASSWORD}
+    depends_on: &depende
+      migracoes:
+        condition: service_completed_successfully
+      mosquitto:
+        condition: service_healthy
+
+  operador:
+    image: horangotango-backend
+    restart: unless-stopped
+    command: ["uvicorn", "operador.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      DATABASE_URL: *banco
+      MQTT_HOST: mosquitto
+      MQTT_USER: ${MQTT_BACKEND_USER}
+      MQTT_PASSWORD: ${MQTT_BACKEND_PASSWORD}
+      JWT_SEGREDO: ${JWT_SEGREDO:?defina no .env}
+      ADMIN_USUARIO: ${ADMIN_USUARIO:?defina no .env}
+      ADMIN_SENHA: ${ADMIN_SENHA:?defina no .env}
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      CORS_ORIGENS: ${CORS_ORIGENS:-}
+    ports:
+      - "${OPERADOR_PORTA:-8000}:8000"
+    depends_on: *depende
+
+  motorista:
+    image: horangotango-backend
+    restart: unless-stopped
+    command: ["uvicorn", "motorista.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_USER: ${MQTT_MOTORISTA_USER}
+      MQTT_PASSWORD: ${MQTT_MOTORISTA_PASSWORD}
+      CORS_ORIGENS: ${CORS_ORIGENS:-}
+    ports:
+      - "${MOTORISTA_PORTA:-8001}:8000"
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+
+  # ESP32 simulado (J1): só sobe com --profile simulador
+  #   docker compose --profile simulador up -d
+  simulador:
+    image: horangotango-backend
+    profiles: ["simulador"]
+    restart: unless-stopped
+    command: ["python", "-m", "simulador", "--device-id", "esp32-garagem-simulado01"]
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_USER: ${MQTT_DISPOSITIVO_USER}
+      MQTT_PASSWORD: ${MQTT_DISPOSITIVO_PASSWORD}
+    depends_on:
+      mosquitto:
+        condition: service_healthy
 
 volumes:
   mosquitto-dados:
+  postgres-dados:

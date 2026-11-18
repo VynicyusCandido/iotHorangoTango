@@ -236,10 +236,12 @@ estado publicado de cada vaga é sempre o atual.
 
 ## Assinantes
 
-Na N3 quem assina os tópicos do dispositivo é o **backend**: valida cada
-mensagem contra o contrato, grava no PostgreSQL e cruza a tag lida com a
-vaga ocupada. Painel do operador e app do motorista falam só com a API
-do backend.
+Na N3 quem assina os tópicos do dispositivo é o **backend**, dividido em
+três assinantes ([ADR 0005](adr/0005-backend-tres-assinantes.md)):
+`persistencia` valida cada mensagem e grava no PostgreSQL; `operador`
+serve a API do painel e é o único que publica `cmd`; `motorista` serve a
+API do app do celular e cruza a tag lida com a vaga ocupada. Painel do
+operador e app do motorista falam só com a API do seu assinante.
 
 O painel da N1 (`app/index.html`) ainda assina os tópicos antigos
 (`garagem/vaga/#`, texto puro) e não mostra os dados do firmware v1.
