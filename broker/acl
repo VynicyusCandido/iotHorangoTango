@@ -1,13 +1,18 @@
 # Permissões do broker (contrato v1, CONTRATOS.md).
-# Regras "pattern" valem para todos os usuários; %c = client id.
-# O firmware conecta com client id = deviceId, então cada ESP32 só
-# publica e lê dentro do próprio prefixo garagem/v1/<deviceId>/.
-pattern write garagem/v1/%c/telemetria
-pattern write garagem/v1/%c/vaga/+/estado
-pattern write garagem/v1/%c/rfid
-pattern write garagem/v1/%c/ack
-pattern write garagem/v1/%c/status
-pattern read garagem/v1/%c/cmd
+# Regras por usuário (não "pattern": pattern vale para todos e deixaria o
+# monitor publicar como se fosse o dispositivo, bastando usar o client id
+# dele). Limite: os dispositivos compartilham o usuário e não são isolados
+# entre si; se o R13 for adiante, usar um usuário por dispositivo
+# (pattern com %u).
+
+# ESP32: publica o que o contrato define e lê só os comandos
+user dispositivo
+topic write garagem/v1/+/telemetria
+topic write garagem/v1/+/vaga/+/estado
+topic write garagem/v1/+/rfid
+topic write garagem/v1/+/ack
+topic write garagem/v1/+/status
+topic read garagem/v1/+/cmd
 
 # Backend, assinante operador (ADR 0005): lê tudo do contrato e é o
 # único que publica comandos

@@ -15,6 +15,10 @@ set -eu
 : "${MQTT_MONITOR_USER:?defina no .env}"
 : "${MQTT_MONITOR_PASSWORD:?defina no .env}"
 
+for senha in "$MQTT_DISPOSITIVO_PASSWORD" "$MQTT_BACKEND_PASSWORD" "$MQTT_PERSISTENCIA_PASSWORD" "$MQTT_MOTORISTA_PASSWORD" "$MQTT_MONITOR_PASSWORD"; do
+  [ "$senha" != "troque-esta-senha" ] || { echo "Troque as senhas do .env (ainda estão com o valor do exemplo)" >&2; exit 1; }
+done
+
 dados=/mosquitto/data
 senhas="$dados/passwd"
 

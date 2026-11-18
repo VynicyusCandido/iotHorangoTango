@@ -179,11 +179,10 @@ Exemplo (`garagem/v1/esp32-garagem-240ac4000110/rfid`):
 
 - **Broker:** Mosquitto no servidor (ou HiveMQ público para testes sem
   RFID)
-- **Painel da N1 (`app/index.html`):** ainda lê os tópicos antigos
-  (`garagem/vaga/N`) e **não mostra os dados do firmware v1**. Será
-  substituído pelo painel servido pelo backend.
-- **App do motorista:** API pronta (assinante `motorista`); interface em
-  desenvolvimento
+- **Painel do operador:** `backend/operador/paginas/`, servido pelo
+  `operador` (porta 8000), com gráficos.
+- **App do motorista:** `backend/motorista/paginas/`, servido pelo
+  `motorista` (porta 8001), para o celular
 
 Fluxogramas do firmware em
 [docs/fluxograma-firmware.md](docs/fluxograma-firmware.md).
@@ -277,14 +276,14 @@ Sem o `secrets.h`, a compilação para com a mensagem
 > Nunca coloque a senha direto no `.ino`: o repositório é público. A
 > senha continua indo para o ESP32 na compilação, só não fica no GitHub.
 
-**MQTT:** o broker também fica no `secrets.h`. Sem estas linhas, o
-firmware usa `broker.hivemq.com:1883` sem usuário:
+**MQTT:** o broker também fica no `secrets.h`. `MQTT_HOST` é
+obrigatório (sem ele a compilação para); não há broker padrão:
 
 ```cpp
 #define MQTT_HOST     "192.168.1.100"   // IP do servidor com Mosquitto
 #define MQTT_PORT     1883
-#define MQTT_USER     "garagem"         // vazio = conexão anônima
-#define MQTT_PASSWORD "SENHA_DO_BROKER"
+#define MQTT_USER     "dispositivo"     // vazio = conexão anônima
+#define MQTT_PASSWORD "SENHA_DO_DISPOSITIVO"  // a do .env
 ```
 
 O `deviceId` é gerado automaticamente a partir do MAC do ESP32
@@ -480,9 +479,9 @@ No `secrets.h`, use a rede real, o IP do servidor e o usuário
 
 ### Voltar ao broker público
 
-Para rodar de novo no Wokwi, remova `MQTT_HOST`, `MQTT_USER` e
-`MQTT_PASSWORD` do `secrets.h` (volta ao `broker.hivemq.com`) e use o
-Wi-Fi `Wokwi-GUEST` (senha vazia).
+Para rodar de novo no Wokwi, use `#define MQTT_HOST "broker.hivemq.com"`,
+`MQTT_USER ""` e `MQTT_PASSWORD ""` no `secrets.h` e o Wi-Fi
+`Wokwi-GUEST` (senha vazia).
 
 ## Backend (três assinantes)
 
@@ -632,54 +631,35 @@ docker compose exec postgres psql -U horangotango -d horangotango
 Se a porta 5432 já estiver em uso na máquina (outro Postgres), defina
 `POSTGRES_PORTA=5434` (ou outra livre) no `.env`.
 
-## Painel de configuração e monitoramento
+## Painel do operador
 
-> **Painel da N1.** Ele ainda lê os tópicos antigos (`garagem/vaga/N`,
-> texto puro) e não mostra os dados do firmware v1. Para acompanhar o
-> firmware atual, use `mosquitto_sub` ou o MQTTX. O painel da N3 será
-> servido pelo backend.
+Página única (`backend/operador/paginas/index.html`, sem build), servida
+pelo serviço `operador` em `http://<IP>:8000/`. Fala **só com a API**
+(`/api/...`, OpenAPI em `/docs`), não com o MQTT.
 
-O diretório `app/` contém o painel web (um único `index.html`, sem
-build), que roda no mesmo servidor do broker e mostra em tempo real
-quais vagas estão livres. Ele se conecta ao broker via MQTT sobre
-WebSocket, assina `garagem/vaga/#` e, graças ao flag *retained*, já
-exibe o último estado de cada vaga ao abrir. A exibição das tags RFID
-(`garagem/rfid/#`) ainda será adicionada.
-
-**Como abrir**
-
-- No servidor, sirva a pasta: `python3 -m http.server -d app 8080` e
-  acesse `http://<IP-do-servidor>:8080` de qualquer aparelho da rede.
-  Também dá para abrir `app/index.html` direto no navegador.
-- Por padrão conecta em `wss://broker.hivemq.com:8884/mqtt`.
-
-**Configuração**
-
-Em **Configurações** (no rodapé) dá para trocar o broker e o tópico
-base; os valores ficam salvos no navegador. Também é possível passar
-pela URL:
-
-```
-index.html?broker=ws://192.168.1.100:9001&base=garagem
-```
-
-**Vagas sem dados:** se o ESP32 perde a conexão, o broker publica
-`offline` no status dele (Last Will) e as vagas aparecem em cinza como
-"Sem dados", fora da contagem de livres. Os LEDs apagam ao mesmo tempo,
-porque o ESP32 sem broker não mostra estado. O broker detecta a queda
-pelo *keepalive* do MQTT, o que leva cerca de 20 segundos.
-
-**Com Mosquitto local:** use `ws://<IP-do-servidor>:9001` como broker.
-O broker local exige usuário e senha, que o painel da N1 não envia.
-Se a página for servida por `https`, o navegador exige `wss://`.
+- **Login** com usuário e senha; o token fica só na sessão do navegador.
+- **Operador:** vê vagas (estado, distância, desde quando), dispositivos
+  (online/offline e último contato), alertas ativos, tags lidas e os
+  gráficos de `/api/estatisticas` (ocupação por hora, permanência média,
+  uptime e tempo em erro).
+- **Administrador:** além disso, reserva e cancela reserva, com o andamento
+  do comando (enviado → aceito → executado → confirmado, ou rejeitado) e o
+  formulário de configuração (limiares e tempo de reserva).
+- A interface esconde reserva e configuração do operador, mas quem barra
+  é o backend (`403`).
+- Os gráficos usam o Chart.js pelo CDN jsDelivr: sem internet no
+  servidor/navegador, o resto do painel funciona e os gráficos não
+  aparecem.
 
 ## App do motorista
 
-App web que roda no celular de cada motorista: mostra as vagas livres
-e destaca a vaga do motorista quando a tag dele é lida. **Ainda não implementado** — ver
-[ADR 0001](docs/adr/0001-rfid-e-app-motorista.md). Na demonstração, o
-celular precisa estar no mesmo Wi-Fi do servidor e alcançar a porta
-9001.
+Página única (`backend/motorista/paginas/index.html`), servida pelo
+serviço `motorista` em `http://<IP>:8001/` e feita para o celular: mostra
+quantas vagas estão livres, ao vivo (WebSocket), e, se o motorista
+informar o código da sua tag, destaca a vaga onde está o carro dele (a
+tag fica salva só no navegador). Na demonstração, o celular precisa estar
+no mesmo Wi-Fi do servidor e alcançar a porta 8001. Ver
+[ADR 0001](docs/adr/0001-rfid-e-app-motorista.md).
 
 ## Adicionar vagas
 
@@ -714,8 +694,8 @@ O projeto pode ser executado sem hardware físico no simulador
 
 - Use a rede `Wokwi-GUEST` (senha vazia) e um broker público. No editor
   do Wokwi, crie uma aba `secrets.h` (botão **+** ao lado das abas →
-  *New file*) com `#define WIFI_SSID "Wokwi-GUEST"` e
-  `#define WIFI_PASSWORD ""`.
+  *New file*) com `#define WIFI_SSID "Wokwi-GUEST"`,
+  `#define WIFI_PASSWORD ""` e `#define MQTT_HOST "broker.hivemq.com"`.
 - Cada HC-SR04 possui um controle deslizante que simula a distância
   medida — arraste-o para abaixo de 25 cm para simular um veículo
   estacionando (o estado muda após ~3 s de leituras confirmadas). Para
@@ -731,8 +711,6 @@ O projeto pode ser executado sem hardware físico no simulador
 
 ```
 .
-├── app/
-│   └── index.html               # Painel de configuração e monitoramento (MQTT via WebSocket)
 ├── docs/
 │   ├── adr/
 │   │   ├── 0001-rfid-e-app-motorista.md  # Decisão: RFID + ultrassônico, ESP32 único, app do motorista
@@ -743,7 +721,8 @@ O projeto pode ser executado sem hardware físico no simulador
 │   │   └── 0006-mqtt-sem-tls-na-rede-local.md   # Justificativa de não usar TLS no MQTT (R16)
 │   ├── fluxograma-firmware.md   # Fluxogramas do firmware e dos subscribers
 │   ├── mapa-de-pinos.md         # Ligações do ESP32
-│   └── IOT_24_08.pdf            # Documentação da disciplina
+│   ├── CP12.md                  # Requisitos (R1–R18) e proposta da N3
+│   └── pendencias-n3.md         # Tarefas por pessoa até a entrega
 ├── src/
 │   └── garagem/
 │       ├── garagem.ino          # Firmware único (HC-SR04 + RC522 + LED RGB)
@@ -776,7 +755,7 @@ Arduino IDE exige. Para abrir, use **Arquivo → Abrir** e escolha
 ## Roadmap
 
 - [x] Indicadores visuais (LED por vaga) como atuadores locais
-- [x] Painel web de vagas livres
+- [x] Painel web de vagas livres (N1) e painel do operador (N3, aguarda o backend)
 - [x] Identificação de carros por RFID (firmware)
 - [x] Firmware no contrato MQTT v1 (JSON, QoS 1, NTP, fila de eventos offline, LED com regra local)
 - [x] Reserva de vaga, comandos (`cmd` / `ack`) e configuração em NVS
@@ -784,8 +763,8 @@ Arduino IDE exige. Para abrir, use **Arquivo → Abrir** e escolha
   operador (login, perfis, comandos) e API do motorista
 - [x] Regra remota de expiração, alertas e Telegram (R8, R15)
 - [x] Simulador do ESP32, estatísticas para os gráficos, tags e usuários
-- [ ] Exibir tags RFID no painel
-- [ ] App do motorista
+- [x] Exibir tags RFID no painel
+- [x] App do motorista
 - [ ] Definir privilégios dos carros com tag (ADR futuro)
 - [x] Autenticação e ACL no Mosquitto (Docker Compose, Mosquitto 2.1)
 - [ ] TLS no MQTT (avaliar; CP12, R16)
