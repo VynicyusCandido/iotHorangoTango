@@ -33,6 +33,8 @@
   .vaga.reservada { border-color:var(--reservada); background:var(--reservada-bg); }
   .vaga.erro, .vaga.sem_dados { border-color:var(--muted); border-style:dashed; background:var(--cinza-bg); }
   .vaga .estado { font-size:1.1rem; font-weight:700; margin:4px 0; }
+  .vaga .leitor { margin-top:2px; }
+  .vaga .leitor.falha { color:var(--ocupada); font-weight:600; }
   ul { list-style:none; margin:0; padding:0; }
   li { padding:6px 0; border-bottom:1px solid var(--border); font-size:.9rem; }
   li:last-child { border-bottom:0; }
@@ -177,7 +179,15 @@
     const info = document.createElement("div"); info.className = "muted";
     info.textContent = (v.distancia_cm != null ? v.distancia_cm.toFixed(1) + " cm" : "sem distância")
       + " · desde " + hora(v.desde);
-    d.append(nome, est, info);
+    // Leitor RFID (ADR 0007): com o dispositivo offline, o último estado não vale
+    const leitor = document.createElement("div"); leitor.className = "muted leitor";
+    if (!v.online || !v.leitor_rfid) {
+      leitor.textContent = "Leitor RFID: " + (v.online ? "sem informação" : "—");
+    } else {
+      leitor.textContent = "Leitor RFID: " + (v.leitor_rfid === "ok" ? "✓ ok" : "✗ falha desde " + hora(v.leitor_rfid_desde));
+      if (v.leitor_rfid === "falha") leitor.classList.add("falha");
+    }
+    d.append(nome, est, info, leitor);
     // Só o administrador vê os botões (o backend confere o perfil de novo, V4/R16)
     if (perfil === "administrador" && (estado === "livre" || estado === "reservada")) {
       const b = document.createElement("button");

@@ -130,6 +130,43 @@ async def test_vagas_mostram_offline(cliente, sessoes):
     assert all(not v["online"] for v in vagas)
 
 
+async def test_atuador_aparece_como_dispositivo_sem_vagas(cliente, sessoes):
+    """ESP32 atuador (ADR 0008): status com "vagas": [] não cria cartões de vaga."""
+    await dispositivo_online(sessoes)
+    atuador = "esp32-atuador-f43b53000001"
+    await Gravador(sessoes).tratar(
+        f"garagem/v1/{atuador}/status",
+        carga(v=1, deviceId=atuador, ts="2026-11-12T10:00:01Z", status="online", firmware="0.1.0", vagas=[]),
+        retido=True,
+    )
+    op = await entrar(cliente, "op", "senha-operador")
+    dispositivos = {d["device_id"]: d for d in (await cliente.get("/api/dispositivos", headers=op)).json()}
+    assert dispositivos[atuador]["online"] and dispositivos[atuador]["vagas"] == []
+    vagas = (await cliente.get("/api/vagas", headers=op)).json()
+    assert {v["device_id"] for v in vagas} == {DEVICE}
+
+
+async def test_vagas_mostram_leitor_rfid(cliente, sessoes):
+    await dispositivo_online(sessoes)
+    op = await entrar(cliente, "op", "senha-operador")
+    # Sem telemetria com o campo: estado do leitor desconhecido
+    vagas = (await cliente.get("/api/vagas", headers=op)).json()
+    assert all(v["leitor_rfid"] is None for v in vagas)
+
+    await Gravador(sessoes).tratar(
+        f"{BASE}/telemetria",
+        carga(
+            v=1, deviceId=DEVICE, ts="2026-11-12T10:00:10Z",
+            vagas=[{"vaga": 1, "distancia": None, "leitor_rfid": "ok"},
+                   {"vaga": 2, "distancia": None, "leitor_rfid": "falha"}],
+            rssi={"valor": -61, "unidade": "dBm"}, uptime={"valor": 10000, "unidade": "ms"},
+        ),
+    )
+    vagas = {v["vaga"]: v for v in (await cliente.get("/api/vagas", headers=op)).json()}
+    assert vagas[1]["leitor_rfid"] == "ok"
+    assert vagas[2]["leitor_rfid"] == "falha" and vagas[2]["leitor_rfid_desde"].startswith("2026-11-12T10:00:10")
+
+
 # ----------------------------------------------------------------------
 # Comandos
 # ----------------------------------------------------------------------

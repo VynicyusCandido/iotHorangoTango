@@ -41,14 +41,21 @@ registrada neste arquivo, com o campo `v` dos payloads incrementado.
 ```json
 { "v": 1, "deviceId": "esp32-garagem-240ac4000110", "ts": "2026-10-27T21:30:00Z",
   "vagas": [
-    { "vaga": 1, "distancia": { "valor": 12.4, "unidade": "cm" } },
-    { "vaga": 2, "distancia": { "valor": 182.0, "unidade": "cm" } }
+    { "vaga": 1, "distancia": { "valor": 12.4, "unidade": "cm" }, "leitor_rfid": "ok" },
+    { "vaga": 2, "distancia": { "valor": 182.0, "unidade": "cm" }, "leitor_rfid": "falha" }
   ],
   "rssi": { "valor": -61, "unidade": "dBm" },
   "uptime": { "valor": 384210, "unidade": "ms" } }
 ```
 
 Leitura inválida de uma vaga: `"distancia": null`.
+
+`leitor_rfid` (opcional, acrescentado em 23/11/2026 —
+[ADR 0007](docs/adr/0007-estado-do-leitor-rfid-na-telemetria.md)):
+resultado da última verificação do RC522 da vaga, feita a cada 5 s —
+`ok` (respondeu) ou `falha` (não respondeu). Ausente = firmware anterior
+(0.10.0), estado do leitor desconhecido. Exceção aditiva ao congelamento
+do v1: nenhum campo existente muda e o payload antigo continua válido.
 
 ### `vaga/{n}/estado`
 

@@ -13,6 +13,14 @@ EXEMPLOS = [
         b' "rssi": { "valor": -61, "unidade": "dBm" }, "uptime": { "valor": 384210, "unidade": "ms" } }',
     ),
     (
+        # Campo opcional leitor_rfid (ADR 0007)
+        f"{BASE}/telemetria",
+        b'{ "v": 1, "deviceId": "esp32-garagem-240ac4000110", "ts": "2026-10-27T21:30:00Z",'
+        b' "vagas": [ { "vaga": 1, "distancia": { "valor": 12.4, "unidade": "cm" }, "leitor_rfid": "ok" },'
+        b' { "vaga": 2, "distancia": { "valor": 182.0, "unidade": "cm" }, "leitor_rfid": "falha" } ],'
+        b' "rssi": { "valor": -61, "unidade": "dBm" }, "uptime": { "valor": 384210, "unidade": "ms" } }',
+    ),
+    (
         f"{BASE}/vaga/1/estado",
         b'{ "v": 1, "deviceId": "esp32-garagem-240ac4000110", "ts": "2026-10-27T21:30:05Z",'
         b' "vaga": 1, "estado": "ocupada", "distancia": { "valor": 12.4, "unidade": "cm" } }',
@@ -56,6 +64,15 @@ def test_exemplos_do_contrato_sao_aceitos(topico, payload):
 
 
 INVALIDOS = [
+    (
+        f"{BASE}/telemetria",
+        carga(
+            v=1, deviceId=DEVICE, ts="2026-10-27T21:30:00Z",
+            vagas=[{"vaga": 1, "distancia": None, "leitor_rfid": "desligado"}],
+            rssi={"valor": -61, "unidade": "dBm"}, uptime={"valor": 1, "unidade": "ms"},
+        ),
+        "leitor_rfid",
+    ),
     ("garagem/vaga/1", b"livre", "tópico fora"),  # tópico da N1
     (f"{BASE}/vaga/1/estado", b"ocupada", "json"),
     (f"{BASE}/vaga/1/estado", carga(v=2, deviceId=DEVICE, ts="2026-10-27T21:30:05Z", vaga=1, estado="livre", distancia=None), "v"),

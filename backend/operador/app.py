@@ -43,6 +43,8 @@ from operador.esquemas import (
     EstatisticasOut,
     LoginReq,
     MedicaoOut,
+    ReservaMotoristaOut,
+    ReservaMotoristaReq,
     RfidOut,
     TagNova,
     TagOut,
@@ -200,6 +202,7 @@ async def vagas(_: Logado, s: Sessao):
                 .order_by(m.EstadoVaga.ts.desc(), m.EstadoVaga.id.desc())
                 .limit(1)
             )
+            leitor = (d.leitores_rfid or {}).get(str(numero)) or {}
             saida.append(
                 VagaOut(
                     device_id=d.device_id,
@@ -208,6 +211,8 @@ async def vagas(_: Logado, s: Sessao):
                     distancia_cm=e.distancia_cm if e else None,
                     desde=e.ts if e else None,
                     online=d.online,
+                    leitor_rfid=leitor.get("estado"),
+                    leitor_rfid_desde=leitor.get("desde"),
                 )
             )
     return saida
@@ -453,6 +458,89 @@ async def enviar(req: Annotated[ComandoReq, Body()], usuario: Admin, request: Re
         )
     except FalhaEnvio:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "broker indisponível; comando não enviado") from None
+
+
+# ----------------------------------------------------------------------
+# Reserva pelo app do motorista (sem login: a tag cadastrada identifica)
+# ----------------------------------------------------------------------
+
+# Uma reserva ativa por tag: comandos de reserva desta tag mais novos que a
+# duração máxima (60 min) cuja vaga ainda está reservada
+JANELA_RESERVA_TAG = timedelta(minutes=60)
+STATUS_EM_ANDAMENTO = ("enviado", "aceito", "executado", "confirmado")
+
+
+async def _estado_atual(s: AsyncSession, device_id: str, vaga: int) -> Optional[str]:
+    e = await s.scalar(
+        select(m.EstadoVaga)
+        .where(m.EstadoVaga.device_id == device_id, m.EstadoVaga.vaga == vaga)
+        .order_by(m.EstadoVaga.ts.desc(), m.EstadoVaga.id.desc())
+        .limit(1)
+    )
+    return e.estado if e else None
+
+
+@rotas.post("/api/motorista/reservas", response_model=ReservaMotoristaOut, status_code=202, tags=["motorista"])
+async def reservar_pelo_motorista(req: ReservaMotoristaReq, request: Request, s: Sessao):
+    """Reserva uma vaga livre para a tag (cadastrada pelo admin), com a duração
+    configurada no dispositivo. Uma reserva ativa por tag."""
+    uid = req.uid.upper()
+    if await s.get(m.Tag, uid) is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "tag não cadastrada; peça o cadastro ao administrador")
+
+    candidatos = [
+        d for d in (await s.scalars(select(m.Dispositivo).order_by(m.Dispositivo.device_id))).all()
+        if req.vaga in (d.vagas or []) and (req.device_id is None or d.device_id == req.device_id)
+    ]
+    if not candidatos:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "vaga inexistente")
+    if len(candidatos) > 1:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "informe o device_id da vaga")
+    disp = candidatos[0]
+    if not disp.online:
+        raise HTTPException(status.HTTP_409_CONFLICT, "garagem offline; tente mais tarde")
+    if await _estado_atual(s, disp.device_id, req.vaga) != "livre":
+        raise HTTPException(status.HTTP_409_CONFLICT, "a vaga não está livre")
+
+    agora = agora_utc()
+    recentes = (
+        await s.scalars(
+            select(m.Comando).where(
+                m.Comando.acao == "reservar",
+                m.Comando.origem == f"tag:{uid}",
+                m.Comando.status.in_(STATUS_EM_ANDAMENTO),
+                m.Comando.enviado_em >= agora - JANELA_RESERVA_TAG,
+            )
+        )
+    ).all()
+    for c in recentes:
+        if c.status in ("enviado", "aceito") or await _estado_atual(s, c.device_id, c.vaga) == "reservada":
+            raise HTTPException(status.HTTP_409_CONFLICT, "esta tag já tem uma reserva ativa")
+
+    try:
+        return await enviar_comando(
+            s,
+            request.app.state.publicar,
+            device_id=disp.device_id,
+            acao="reservar",
+            vaga=req.vaga,
+            parametros={},
+            origem=f"tag:{uid}",
+            agora=agora,
+        )
+    except FalhaEnvio:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "broker indisponível; reserva não enviada") from None
+
+
+@rotas.get("/api/motorista/reservas/{command_id}", response_model=ReservaMotoristaOut, tags=["motorista"])
+async def ver_reserva_do_motorista(command_id: str, s: Sessao):
+    """Andamento de uma reserva feita pelo app do motorista."""
+    cmd = await s.scalar(
+        select(m.Comando).where(m.Comando.command_id == command_id, m.Comando.origem.startswith("tag:"))
+    )
+    if cmd is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "reserva não encontrada")
+    return cmd
 
 
 # ----------------------------------------------------------------------

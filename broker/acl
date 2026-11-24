@@ -14,6 +14,13 @@ topic write garagem/v1/+/ack
 topic write garagem/v1/+/status
 topic read garagem/v1/+/cmd
 
+# ESP32 atuador (LEDs, ADR 0008): lê o estado das vagas e o status do
+# ESP32 dos sensores e publica só o próprio status (LWT); nunca lê comandos
+user atuador
+topic read garagem/v1/+/vaga/+/estado
+topic read garagem/v1/+/status
+topic write garagem/v1/+/status
+
 # Backend, assinante operador (ADR 0005): lê tudo do contrato e é o
 # único que publica comandos
 user backend

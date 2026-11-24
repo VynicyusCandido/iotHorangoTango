@@ -14,6 +14,8 @@ services:
     environment:
       MQTT_DISPOSITIVO_USER: ${MQTT_DISPOSITIVO_USER:?defina no .env}
       MQTT_DISPOSITIVO_PASSWORD: ${MQTT_DISPOSITIVO_PASSWORD:?defina no .env}
+      MQTT_ATUADOR_USER: ${MQTT_ATUADOR_USER:?defina no .env}
+      MQTT_ATUADOR_PASSWORD: ${MQTT_ATUADOR_PASSWORD:?defina no .env}
       MQTT_BACKEND_USER: ${MQTT_BACKEND_USER:?defina no .env}
       MQTT_BACKEND_PASSWORD: ${MQTT_BACKEND_PASSWORD:?defina no .env}
       MQTT_PERSISTENCIA_USER: ${MQTT_PERSISTENCIA_USER:?defina no .env}
@@ -111,6 +113,8 @@ services:
       MQTT_USER: ${MQTT_MOTORISTA_USER}
       MQTT_PASSWORD: ${MQTT_MOTORISTA_PASSWORD}
       CORS_ORIGENS: ${CORS_ORIGENS:-}
+      # Reservas: repassadas ao operador, único que publica comandos
+      OPERADOR_URL: http://operador:8000
     ports:
       - "${MOTORISTA_PORTA:-8001}:8000"
     depends_on:

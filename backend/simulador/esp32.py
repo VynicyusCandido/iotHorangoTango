@@ -128,7 +128,8 @@ class SimuladorESP32:
         uptime = int((self.agora() - self._boot).total_seconds() * 1000)
         vagas = [
             {"vaga": v.numero,
-             "distancia": None if v.distancia is None else {"valor": round(v.distancia, 1), "unidade": "cm"}}
+             "distancia": None if v.distancia is None else {"valor": round(v.distancia, 1), "unidade": "cm"},
+             "leitor_rfid": "ok"}
             for v in self.vagas.values()
         ]
         corpo = {

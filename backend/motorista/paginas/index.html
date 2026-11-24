@@ -37,6 +37,8 @@
   #meuCarro { font-weight:600; margin-top:10px; min-height:1.4em; }
   input { width:100%; margin-top:6px; padding:10px; border:1px solid var(--border); border-radius:8px;
           background:var(--bg); color:var(--text); font:inherit; text-transform:uppercase; }
+  .vaga button { width:100%; margin-top:8px; padding:6px 8px; font-size:.85rem; }
+  #msgReserva { margin-top:12px; min-height:1.4em; font-weight:600; }
   button { margin-top:10px; padding:10px 16px; border:0; border-radius:8px;
            background:var(--text); color:var(--bg); font:inherit; cursor:pointer; }
 </style>
@@ -52,13 +54,15 @@
   </section>
 
   <div id="vagas" class="grade"></div>
+  <div id="msgReserva" aria-live="polite"></div>
 
   <section class="card">
-    <strong>Onde está meu carro?</strong>
+    <strong>Minha tag</strong>
+    <div class="muted">Informe o código para ver onde está seu carro e reservar uma vaga livre.</div>
     <form id="formTag">
       <label class="muted" for="uid">Código da sua tag (hexadecimal, ex.: 04A1B2C3)</label>
       <input id="uid" inputmode="text" autocomplete="off" pattern="(?:[0-9A-Fa-f]{2}){4,10}" required>
-      <button type="submit">Procurar</button>
+      <button type="submit">Salvar e procurar meu carro</button>
     </form>
     <div id="meuCarro" aria-live="polite"></div>
   </section>
@@ -67,7 +71,7 @@
 <script>
   // API pública do motorista (mesma origem; OpenAPI em /docs). Só o agora.
   const el = (id) => document.getElementById(id);
-  let uid = "", minha = null, ws = null, ultimoResumo = null;
+  let uid = "", minha = null, ws = null, ultimoResumo = null, reservando = false;
   try { uid = localStorage.getItem("uid") || ""; } catch (e) {}
 
   const nome = (v) => (ultimoResumo && new Set(ultimoResumo.vagas.map((x) => x.deviceId)).size > 1
@@ -88,6 +92,12 @@
       e.textContent = v.estado === "sem_dados" ? "sem dados" : v.estado;
       d.append(n, e);
       if (ehMinha(v)) { const m = document.createElement("div"); m.className = "muted"; m.textContent = "seu carro"; d.append(m); }
+      if (v.estado === "livre" && uid) {
+        const b = document.createElement("button");
+        b.textContent = "Reservar"; b.disabled = reservando;
+        b.addEventListener("click", () => reservar(v));
+        d.append(b);
+      }
       return d;
     }));
   }
@@ -101,6 +111,35 @@
         : r.status === 404 ? "Seu carro não está em nenhuma vaga." : "Código de tag inválido.";
     } catch (e) { el("meuCarro").textContent = "Sem conexão com o servidor."; }
     if (ultimoResumo) desenhar(ultimoResumo);
+  }
+
+  // Reserva: o servidor confere a tag (cadastrada pelo administrador) e
+  // manda o comando à garagem; aqui só acompanhamos até a confirmação.
+  const ERROS = {
+    VAGA_OCUPADA: "a vaga foi ocupada antes da reserva",
+    VAGA_EM_ERRO: "o sensor da vaga está com problema",
+  };
+  const aviso = (t) => { el("msgReserva").textContent = t; };
+  const pausa = (ms) => new Promise((ok) => setTimeout(ok, ms));
+
+  async function reservar(v) {
+    reservando = true; if (ultimoResumo) desenhar(ultimoResumo);
+    aviso("Enviando reserva da " + nome(v) + "…");
+    try {
+      let r = await fetch("/api/reservas", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uid, vaga: v.vaga, deviceId: v.deviceId }) });
+      let c = await r.json();
+      if (!r.ok) { aviso("Não foi possível reservar: " + (c.detail || "erro " + r.status) + "."); return; }
+      for (let i = 0; i < 20 && !["confirmado", "rejeitado", "falha_envio"].includes(c.status); i++) {
+        await pausa(1000);
+        r = await fetch("/api/reservas/" + c.commandId);
+        if (r.ok) c = await r.json();
+      }
+      aviso(c.status === "confirmado" || c.status === "executado" ? "Vaga " + v.vaga + " reservada para você."
+        : c.status === "rejeitado" ? "Reserva recusada: " + (ERROS[c.erro] || c.erro) + "."
+        : "A garagem ainda não confirmou; veja o estado da vaga acima.");
+    } catch (e) { aviso("Sem conexão com o servidor."); }
+    finally { reservando = false; if (ultimoResumo) desenhar(ultimoResumo); }
   }
 
   el("formTag").addEventListener("submit", (ev) => {

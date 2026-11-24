@@ -51,6 +51,9 @@ class VagaOut(BaseModel):
     distancia_cm: Optional[float]
     desde: Optional[datetime]
     online: bool
+    # Leitor RFID da vaga (ADR 0007): "ok", "falha" ou null (firmware não informa)
+    leitor_rfid: Optional[str] = None
+    leitor_rfid_desde: Optional[datetime] = None
 
 
 class EstadoOut(_Saida):
@@ -149,6 +152,25 @@ class ComandoOut(_Saida):
     recebido_em: Optional[datetime]
     executado_em: Optional[datetime]
     confirmado_em: Optional[datetime]
+
+
+# Reserva pelo app do motorista (pública, identificada pela tag cadastrada)
+
+
+class ReservaMotoristaReq(BaseModel):
+    uid: UidTag
+    vaga: int = Field(ge=1)
+    device_id: Optional[str] = None  # obrigatório só com mais de um dispositivo
+
+
+class ReservaMotoristaOut(_Saida):
+    """O que o motorista vê do comando: sem origem nem dados de outros."""
+
+    command_id: str
+    device_id: str
+    vaga: Optional[int]
+    status: str
+    erro: Optional[str]
 
 
 # Comandos: mesmas faixas do CONTRATOS.md, checadas antes de publicar

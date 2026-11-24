@@ -40,7 +40,7 @@
 #define MQTT_PASSWORD ""
 #endif
 
-const char* FIRMWARE_VERSAO = "0.10.0";
+const char* FIRMWARE_VERSAO = "0.13.0";
 const int   CONTRATO_VERSAO = 1;
 
 // Servidores de hora (UTC)
@@ -438,6 +438,9 @@ void publicarTelemetria() {
     JsonObject o = lista.add<JsonObject>();
     o["vaga"] = vagas[i].numero;
     preencherDistancia(o, vagas[i].distancia);
+    // Resultado da última verificação do RC522 (a cada 5 s); campo opcional
+    // acrescentado ao v1 (ADR 0007)
+    o["leitor_rfid"] = vagas[i].leitorOk ? "ok" : "falha";
   }
   JsonObject rssi = doc["rssi"].to<JsonObject>();
   rssi["valor"] = WiFi.RSSI();
@@ -744,6 +747,15 @@ bool leitorResponde(MFRC522& leitor) {
   return versao != 0x00 && versao != 0xFF;
 }
 
+// Log com o VersionReg lido, para diagnóstico na bancada:
+// 0x00 = sem alimentação ou MISO solto; 0xFF = SDA/SCK solto ou pino errado;
+// 0x91/0x92 = RC522 respondendo
+void logLeitor(int i, bool ok) {
+  byte versao = leitores[i].PCD_ReadRegister(MFRC522::VersionReg);
+  Serial.printf("RFID vaga %d: %s (VersionReg 0x%02X)\n", vagas[i].numero,
+                ok ? "leitor OK" : "LEITOR NAO RESPONDE", versao);
+}
+
 // Leitor sob o piso da maquete (ADR 0003): ganho máximo da antena para
 // ler a tag embaixo do carro através do piso
 void iniciarLeitores() {
@@ -751,6 +763,11 @@ void iniciarLeitores() {
     leitores[i].PCD_Init(vagas[i].rfidSS, PIN_RFID_RST);
     leitores[i].PCD_SetAntennaGain(MFRC522::RxGain_max);
   }
+  // PCD_Init deixa o RST como entrada quando faz reset por software; solta,
+  // a linha (comum aos leitores) cai e põe o RC522 em power-down (VersionReg
+  // 0x00 na verificação seguinte). Mantém o RST em nível alto.
+  pinMode(PIN_RFID_RST, OUTPUT);
+  digitalWrite(PIN_RFID_RST, HIGH);
 }
 
 void checarLeitores() {
@@ -764,10 +781,7 @@ void checarLeitores() {
 
   for (int i = 0; i < NUM_VAGAS; i++) {
     bool ok = leitorResponde(leitores[i]);
-    if (ok != vagas[i].leitorOk) {
-      Serial.printf("RFID vaga %d: %s\n", vagas[i].numero,
-                    ok ? "leitor OK" : "LEITOR NAO RESPONDE");
-    }
+    if (ok != vagas[i].leitorOk) logLeitor(i, ok);
     vagas[i].leitorOk = ok;
   }
 }
@@ -906,8 +920,7 @@ void setup() {
   iniciarLeitores();
   for (int i = 0; i < NUM_VAGAS; i++) {
     vagas[i].leitorOk = leitorResponde(leitores[i]);
-    Serial.printf("RFID vaga %d: %s\n", vagas[i].numero,
-                  vagas[i].leitorOk ? "leitor OK" : "LEITOR NAO RESPONDE");
+    logLeitor(i, vagas[i].leitorOk);
   }
 
   gerarIdentidade();

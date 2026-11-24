@@ -116,6 +116,22 @@ class Gravador:
             if v.distancia is not None:
                 s.add(m.Medicao(vaga=v.vaga, grandeza="distancia", valor=v.distancia.valor, unidade="cm", **comum))
         s.add(m.Medicao(vaga=None, grandeza="rssi", valor=t.rssi.valor, unidade="dBm", **comum))
+        if not retido:
+            self._leitores_rfid(disp, t, ts)
+
+    @staticmethod
+    def _leitores_rfid(disp: m.Dispositivo, t: contrato.Telemetria, ts: datetime) -> None:
+        """Estado atual do leitor de cada vaga; "desde" só muda quando o estado muda."""
+        leitores = dict(disp.leitores_rfid or {})
+        for v in t.vagas:
+            if v.leitor_rfid is None:  # firmware anterior: não informa
+                continue
+            chave = str(v.vaga)
+            anterior = leitores.get(chave) or {}
+            desde = anterior.get("desde") if anterior.get("estado") == v.leitor_rfid else ts.isoformat()
+            leitores[chave] = {"estado": v.leitor_rfid, "desde": desde, "atualizado_em": ts.isoformat()}
+        # Dicionário novo: o SQLAlchemy só percebe a mudança do JSON na troca
+        disp.leitores_rfid = leitores
 
     async def _estado(self, s, disp, e: contrato.EstadoVaga, recebido, retido) -> None:
         ts, estimado = self._quando(disp.device_id, e, recebido)

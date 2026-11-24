@@ -33,3 +33,5 @@ jobs:
         run: |
           cp src/garagem/secrets.example.h src/garagem/secrets.h
           arduino-cli compile --fqbn esp32:esp32:esp32 src/garagem
+          cp src/atuador/secrets.example.h src/atuador/secrets.h
+          arduino-cli compile --fqbn esp32:esp32:esp32 src/atuador

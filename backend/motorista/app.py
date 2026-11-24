@@ -4,6 +4,10 @@ uvicorn motorista.app:app — documentação OpenAPI em /docs.
 
 Assina só estado das vagas, status e RFID (usuário MQTT "motorista",
 somente leitura). Não expõe distâncias nem UIDs de outros carros.
+
+Reserva: repassa o pedido ao operador (OPERADOR_URL), que é o único que
+publica comandos e os registra no banco; a tag cadastrada identifica o
+motorista.
 """
 from __future__ import annotations
 
@@ -11,10 +15,15 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path as Caminho
 
+from typing import Optional
+
+import httpx
 from fastapi import FastAPI, HTTPException, Path, WebSocket
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from comum import contrato
-from comum.config import configurar_log
+from comum.config import configurar_log, opcional
 from comum.mqtt import assinar_para_sempre
 from comum.tempo_real import Difusor
 from comum.web import configurar_web
@@ -22,9 +31,29 @@ from motorista.garagem import Garagem
 
 PASTA_PAGINAS = Caminho(__file__).parent / "paginas"
 TOPICOS = ["garagem/v1/+/vaga/+/estado", "garagem/v1/+/status", "garagem/v1/+/rfid"]
+UID = r"^(?:[0-9A-Fa-f]{2}){4,10}$"
 
 
-def criar_app(iniciar_mqtt: bool = True) -> FastAPI:
+class PedidoReserva(BaseModel):
+    uid: str = Field(pattern=UID)
+    vaga: int = Field(ge=1)
+    deviceId: Optional[str] = None
+
+
+def _reserva(dados: dict) -> dict:
+    """Resposta do operador no formato da API do motorista (camelCase)."""
+    return {
+        "commandId": dados["command_id"],
+        "deviceId": dados["device_id"],
+        "vaga": dados["vaga"],
+        "status": dados["status"],
+        "erro": dados["erro"],
+    }
+
+
+def criar_app(iniciar_mqtt: bool = True, operador: Optional[httpx.AsyncBaseTransport] = None) -> FastAPI:
+    """`operador`: transporte HTTP falso nos testes; em produção, OPERADOR_URL."""
+    url_operador = opcional("OPERADOR_URL", "http://operador:8000")
     garagem = Garagem()
     difusor = Difusor()
     conexao = {"broker": False}
@@ -69,6 +98,34 @@ def criar_app(iniciar_mqtt: bool = True) -> FastAPI:
         if vaga is None:
             raise HTTPException(404, "carro com esta tag não está em nenhuma vaga")
         return vaga
+
+    async def chamar_operador(metodo: str, caminho: str, corpo: Optional[dict] = None):
+        try:
+            async with httpx.AsyncClient(base_url=url_operador, transport=operador, timeout=10) as c:
+                r = await c.request(metodo, caminho, json=corpo)
+        except httpx.HTTPError:
+            raise HTTPException(503, "servidor de reservas indisponível") from None
+        if r.status_code >= 400:
+            detalhe = r.json().get("detail") if r.headers.get("content-type", "").startswith("application/json") else None
+            return JSONResponse({"detail": detalhe if isinstance(detalhe, str) else "pedido inválido"}, r.status_code)
+        return JSONResponse(_reserva(r.json()), r.status_code)
+
+    @app.post("/api/reservas", status_code=202, tags=["reserva"])
+    async def reservar(pedido: PedidoReserva):
+        """Reserva uma vaga livre para a sua tag (cadastrada pelo administrador).
+
+        Uma reserva ativa por tag; a duração é a configurada na garagem.
+        Acompanhe em GET /api/reservas/{commandId}: enviado -> aceito
+        (ou rejeitado) -> executado -> confirmado."""
+        corpo = {"uid": pedido.uid.upper(), "vaga": pedido.vaga}
+        if pedido.deviceId:
+            corpo["device_id"] = pedido.deviceId
+        return await chamar_operador("POST", "/api/motorista/reservas", corpo)
+
+    @app.get("/api/reservas/{command_id}", tags=["reserva"])
+    async def ver_reserva(command_id: str = Path(pattern=r"^c-[0-9a-f]{12}$")):
+        """Andamento da reserva."""
+        return await chamar_operador("GET", f"/api/motorista/reservas/{command_id}")
 
     @app.websocket("/ws")
     async def tempo_real(websocket: WebSocket):

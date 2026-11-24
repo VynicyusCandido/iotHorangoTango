@@ -6,6 +6,8 @@ set -eu
 
 : "${MQTT_DISPOSITIVO_USER:?defina no .env}"
 : "${MQTT_DISPOSITIVO_PASSWORD:?defina no .env}"
+: "${MQTT_ATUADOR_USER:?defina no .env}"
+: "${MQTT_ATUADOR_PASSWORD:?defina no .env}"
 : "${MQTT_BACKEND_USER:?defina no .env}"
 : "${MQTT_BACKEND_PASSWORD:?defina no .env}"
 : "${MQTT_PERSISTENCIA_USER:?defina no .env}"
@@ -15,7 +17,7 @@ set -eu
 : "${MQTT_MONITOR_USER:?defina no .env}"
 : "${MQTT_MONITOR_PASSWORD:?defina no .env}"
 
-for senha in "$MQTT_DISPOSITIVO_PASSWORD" "$MQTT_BACKEND_PASSWORD" "$MQTT_PERSISTENCIA_PASSWORD" "$MQTT_MOTORISTA_PASSWORD" "$MQTT_MONITOR_PASSWORD"; do
+for senha in "$MQTT_DISPOSITIVO_PASSWORD" "$MQTT_ATUADOR_PASSWORD" "$MQTT_BACKEND_PASSWORD" "$MQTT_PERSISTENCIA_PASSWORD" "$MQTT_MOTORISTA_PASSWORD" "$MQTT_MONITOR_PASSWORD"; do
   [ "$senha" != "troque-esta-senha" ] || { echo "Troque as senhas do .env (ainda estão com o valor do exemplo)" >&2; exit 1; }
 done
 
@@ -26,6 +28,7 @@ rm -f "$senhas"
 touch "$senhas"
 chmod 0600 "$senhas"
 mosquitto_passwd -b "$senhas" "$MQTT_DISPOSITIVO_USER" "$MQTT_DISPOSITIVO_PASSWORD"
+mosquitto_passwd -b "$senhas" "$MQTT_ATUADOR_USER" "$MQTT_ATUADOR_PASSWORD"
 mosquitto_passwd -b "$senhas" "$MQTT_BACKEND_USER" "$MQTT_BACKEND_PASSWORD"
 mosquitto_passwd -b "$senhas" "$MQTT_PERSISTENCIA_USER" "$MQTT_PERSISTENCIA_PASSWORD"
 mosquitto_passwd -b "$senhas" "$MQTT_MOTORISTA_USER" "$MQTT_MOTORISTA_PASSWORD"

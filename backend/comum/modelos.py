@@ -26,6 +26,9 @@ class Dispositivo(Base):
     # Duração padrão da reserva no ESP32 (comando configurar), salva no
     # banco para a regra de reserva vencida (R8)
     duracao_reserva_min: Mapped[int] = mapped_column(default=15, server_default="15")
+    # Estado atual do leitor RFID de cada vaga, vindo da telemetria (ADR 0007):
+    # {"1": {"estado": "ok" | "falha", "desde": iso, "atualizado_em": iso}}
+    leitores_rfid: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON)
 
 
 class EventoStatus(Base):

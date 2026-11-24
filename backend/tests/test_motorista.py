@@ -54,6 +54,54 @@ async def test_minha_vaga_pela_tag(app, cliente):
     assert (await cliente.get("/api/minha-vaga/04A1B2C3")).status_code == 404
 
 
+async def test_tag_de_carro_que_saiu_nao_vale_para_o_proximo(app, cliente):
+    await receber(app, *status_online())
+    # Carro A, com tag, estaciona e sai
+    await receber(app, *estado(1, "livre", "2026-11-12T10:00:00Z", 80.0))
+    await receber(app, *rfid(1, "04A1B2C3", "2026-11-12T10:01:00Z"))
+    await receber(app, *estado(1, "ocupada", "2026-11-12T10:01:03Z"))
+    await receber(app, *estado(1, "livre", "2026-11-12T11:00:00Z", 80.0))
+    # A tag é lida de novo quando o carro A passa sobre o leitor ao sair
+    await receber(app, *rfid(1, "04A1B2C3", "2026-11-12T11:00:02Z"))
+    # Carro B, sem tag, ocupa a vaga mais tarde
+    await receber(app, *estado(1, "ocupada", "2026-11-12T11:30:00Z"))
+    assert (await cliente.get("/api/minha-vaga/04A1B2C3")).status_code == 404
+
+
+async def test_tag_de_quem_saiu_nao_vale_para_quem_chega_logo_depois(app, cliente):
+    """Dentro da margem de 60 s, mas antes de a vaga ficar livre: é do carro que saiu."""
+    await receber(app, *status_online())
+    await receber(app, *estado(1, "livre", "2026-11-24T22:29:00Z", 80.0))
+    await receber(app, *rfid(1, "532B2F01140001", "2026-11-24T22:30:02Z"))
+    await receber(app, *estado(1, "ocupada", "2026-11-24T22:30:09Z"))
+    assert (await cliente.get("/api/minha-vaga/532B2F01140001")).status_code == 200
+    await receber(app, *estado(1, "livre", "2026-11-24T22:30:29Z", 80.0))
+    # Outro carro, sem tag, ocupa 32 s depois da leitura
+    await receber(app, *estado(1, "ocupada", "2026-11-24T22:30:34Z"))
+    assert (await cliente.get("/api/minha-vaga/532B2F01140001")).status_code == 404
+
+
+async def test_republicar_ocupada_nao_reinicia_a_ocupacao(app, cliente):
+    await receber(app, *status_online())
+    await receber(app, *rfid(1, "04A1B2C3", "2026-11-12T10:00:00Z"))
+    await receber(app, *estado(1, "ocupada", "2026-11-12T10:00:03Z"))
+    # ESP32 reconecta e republica o mesmo estado bem depois
+    await receber(app, *estado(1, "ocupada", "2026-11-12T12:00:00Z"))
+    r = await cliente.get("/api/minha-vaga/04A1B2C3")
+    assert r.status_code == 200 and r.json()["vaga"] == 1
+
+
+async def test_falha_do_sensor_nao_encerra_a_ocupacao(app, cliente):
+    await receber(app, *status_online())
+    await receber(app, *rfid(1, "04A1B2C3", "2026-11-12T10:00:00Z"))
+    await receber(app, *estado(1, "ocupada", "2026-11-12T10:00:03Z"))
+    await receber(app, *estado(1, "erro", "2026-11-12T10:30:00Z", None))
+    assert (await cliente.get("/api/minha-vaga/04A1B2C3")).status_code == 404  # estado incerto
+    await receber(app, *estado(1, "ocupada", "2026-11-12T10:31:00Z"))
+    r = await cliente.get("/api/minha-vaga/04A1B2C3")
+    assert r.status_code == 200 and r.json()["vaga"] == 1
+
+
 async def test_mensagem_invalida_e_ignorada(app, cliente):
     await receber(app, "garagem/vaga/1", b"livre")
     assert (await cliente.get("/api/vagas")).json()["total"] == 0

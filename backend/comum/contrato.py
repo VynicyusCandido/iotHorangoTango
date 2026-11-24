@@ -99,6 +99,8 @@ class _DoDispositivo(_Modelo):
 class TelemetriaVaga(_Modelo):
     vaga: NumeroVaga
     distancia: Optional[Distancia]
+    # Opcional (ADR 0007): firmware anterior não envia; ausente = desconhecido
+    leitor_rfid: Optional[Literal["ok", "falha"]] = None
 
 
 class Telemetria(_DoDispositivo):

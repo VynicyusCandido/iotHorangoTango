@@ -89,6 +89,39 @@ async def test_telemetria_grava_distancias_e_rssi(sessoes):
     assert sorted(linhas, key=str) == sorted([("distancia", 1, 12.4), ("rssi", None, -61.0)], key=str)
 
 
+def telemetria_leitores(ts, leitor1, leitor2=None):
+    vagas = [{"vaga": 1, "distancia": None, "leitor_rfid": leitor1}]
+    vagas.append({"vaga": 2, "distancia": None} if leitor2 is None else {"vaga": 2, "distancia": None, "leitor_rfid": leitor2})
+    return f"{BASE}/telemetria", carga(
+        v=1, deviceId=DEVICE, ts=ts, vagas=vagas,
+        rssi={"valor": -61, "unidade": "dBm"}, uptime={"valor": 384210, "unidade": "ms"},
+    )
+
+
+async def test_telemetria_guarda_estado_do_leitor_rfid(sessoes):
+    g = gravador(sessoes)
+    await g.tratar(*telemetria_leitores("2026-11-23T21:00:00Z", "ok"))
+    await g.tratar(*telemetria_leitores("2026-11-23T21:00:10Z", "ok"))
+    async with sessoes() as s:
+        leitores = (await s.get(m.Dispositivo, DEVICE)).leitores_rfid
+    # "desde" fica no início do estado; vaga 2 sem o campo (firmware antigo) não entra
+    assert leitores == {"1": {"estado": "ok", "desde": "2026-11-23T21:00:00+00:00",
+                              "atualizado_em": "2026-11-23T21:00:10+00:00"}}
+
+    await g.tratar(*telemetria_leitores("2026-11-23T21:00:20Z", "falha", "ok"))
+    async with sessoes() as s:
+        leitores = (await s.get(m.Dispositivo, DEVICE)).leitores_rfid
+    assert leitores["1"]["estado"] == "falha" and leitores["1"]["desde"] == "2026-11-23T21:00:20+00:00"
+    assert leitores["2"]["estado"] == "ok"
+
+
+async def test_telemetria_retida_nao_altera_leitor_rfid(sessoes):
+    g = gravador(sessoes)
+    await g.tratar(*telemetria_leitores("2026-11-23T21:00:00Z", "falha"), retido=True)
+    async with sessoes() as s:
+        assert (await s.get(m.Dispositivo, DEVICE)).leitores_rfid is None
+
+
 async def test_ts_nulo_estimado_pela_telemetria(sessoes):
     g = gravador(sessoes)
     # Telemetria (ao vivo) diz: uptime 600000 ms = 10:04:00

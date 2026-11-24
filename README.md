@@ -581,7 +581,13 @@ Pública, sem login. Não mostra distâncias nem tags de outros carros.
 |---|---|
 | `GET /api/vagas` | `livres`, `total` e cada vaga (`livre`, `ocupada`, `reservada`, `erro` ou `sem_dados` com o ESP32 offline) |
 | `GET /api/minha-vaga/{uid}` | vaga ocupada onde a tag foi lida por último (404 se o carro não está em nenhuma) |
+| `POST /api/reservas` | reserva uma vaga livre: `{"uid", "vaga"}` (e `deviceId` com mais de um ESP32). A tag precisa estar cadastrada pelo admin (403); uma reserva ativa por tag (409); duração = a configurada na garagem |
+| `GET /api/reservas/{commandId}` | andamento: `enviado` → `aceito` (ou `rejeitado`, com `erro`) → `executado` → `confirmado` |
 | `WS /ws` | resumo das vagas ao conectar e a cada mudança |
+
+A reserva é repassada ao operador (`OPERADOR_URL`), que continua sendo o
+único a publicar comandos; o comando fica no histórico com origem
+`tag:<uid>`.
 
 ### Painel e app: como as páginas chegam ao navegador
 
