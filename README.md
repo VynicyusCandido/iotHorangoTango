@@ -191,6 +191,22 @@ Fluxogramas do firmware em
 > compartilhados com qualquer pessoa — inclusive os UIDs das tags. Use o
 > Mosquitto local sempre que o RFID estiver ligado.
 
+## Maquete montada
+
+Maquete da N3 em caixas de papelão: duas vagas lado a lado, cada uma com
+HC-SR04 no teto, RC522 sob o piso e LED RGB. Um ESP32 opera tudo
+(firmware 0.13.0); a fiação compartilhada (barramento SPI dos RC522,
+alimentação e divisores do Echo) passa por uma mini protoboard atrás da
+caixa ([mapa de pinos](docs/mapa-de-pinos.md)).
+
+<p>
+  <img src="docs/maquete-montada-externa.jpg" alt="Maquete montada: caixas empilhadas, com o cabo USB do ESP32 saindo pela lateral" width="300">
+  <img src="docs/maquete-montada-leds.jpg" alt="Vagas vistas de frente: vaga 1 com LED verde (livre) e vaga 2 com LED azul (reservada)" width="520">
+</p>
+
+Na foto da direita, a vaga 1 está **livre** (verde) e a vaga 2,
+**reservada** pelo app do motorista (azul).
+
 ## Hardware necessário
 
 - 1× ESP32 DevKit de 30 pinos (ESP32-WROOM-32, USB-C, CP2102) — de
