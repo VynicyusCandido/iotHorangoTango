@@ -82,6 +82,13 @@ seu `SDA` (SS). O firmware seleciona um leitor por vez.
 
 > **Somente 3,3 V.** Ligar o RC522 em 5 V queima o leitor.
 
+> **RST em nível alto.** O `PCD_Init` da biblioteca MFRC522 deixa o pino
+> RST como entrada depois do reset por software; solto, a linha comum
+> cai e o leitor entra em power-down (`VersionReg` = `0x00`). O firmware
+> (0.12.1+) volta o GPIO 22 para saída em `HIGH` logo após iniciar os
+> leitores. Se um leitor puxar a linha para baixo (mau contato, módulo
+> com defeito), **os dois** param de responder: teste um por vez.
+
 ### HC-SR04 (×2)
 
 | HC-SR04 | Sensor vaga 1                 | Sensor vaga 2                 |
@@ -97,6 +104,19 @@ Divisor de tensão em cada `Echo` (5 V → 3,3 V):
 Echo ──[ 1 kΩ ]──┬──► GPIO 34 (ou 35)
                  │
               [ 2 kΩ ]
+                 │
+                GND
+```
+
+Na maquete, o 2 kΩ é feito com **dois resistores de 1 kΩ em série**
+(3× 1 kΩ por vaga), com o mesmo resultado (5 V × 2/3 ≈ 3,3 V):
+
+```
+Echo ──[ 1 kΩ ]──┬──► GPIO 34 (ou 35)
+                 │
+              [ 1 kΩ ]
+                 │
+              [ 1 kΩ ]
                  │
                 GND
 ```
@@ -130,6 +150,22 @@ sensor em falha = `R` piscando; ainda sem leitura = apagado.
 | USB → VIN 5 V | ESP32, 2× HC-SR04               |
 | 3V3 do ESP32  | 2× RC522                        |
 | GND           | comum a **todos** os componentes |
+
+Na maquete, o ESP32 fica na caixa e uma **mini protoboard (170 furos)**
+atrás dela distribui as linhas comuns, já que a placa tem um só 3V3 e um
+só VIN:
+
+- trilha **3V3**: `3.3V` dos dois RC522;
+- trilha **VIN (5 V)**: `VCC` dos dois HC-SR04;
+- trilha **GND**: GND do ESP32, dos RC522, dos HC-SR04 e o comum dos
+  LEDs;
+- trilha **RST** (GPIO 22): `RST` dos dois RC522;
+- os dois divisores do `Echo`, um por metade da protoboard.
+
+Em cada fileira de 5 furos tudo está ligado; as duas metades (separadas
+pelo canal central) são isoladas. `SCK`, `MOSI`, `MISO` e `SDA` podem ir
+direto do leitor ao ESP32 (jumpers fêmea-fêmea) ou também passar pela
+protoboard.
 
 Consumo estimado: ~250 mA no total (ESP32 com Wi-Fi + 2× RC522 + 2×
 HC-SR04 + LEDs), dentro de uma fonte USB 5 V / 1 A.

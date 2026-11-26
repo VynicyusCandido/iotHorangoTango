@@ -34,9 +34,10 @@ Angelico, Vynicyus Candido.
 
 - **Problema:** em garagens, o motorista perde tempo procurando vaga e o
   operador não sabe em tempo real quantas vagas estão livres.
-- **Usuários:** o **motorista** (consulta vagas livres no celular e é
-  guiado pelos LEDs) e o **operador/administrador** do estacionamento
-  (monitora, configura e reserva vagas).
+- **Usuários:** o **motorista** (consulta vagas livres no celular,
+  reserva uma vaga com a sua tag cadastrada e é guiado pelos LEDs) e o
+  **operador/administrador** do estacionamento (monitora, configura,
+  cadastra tags e reserva vagas).
 - **Estado atual (herdado da N1):** ESP32 com HC-SR04 publicando o
   estado de cada vaga em MQTT, LEDs indicando livre/ocupada via broker,
   app web de vagas livres e broker Mosquitto local. Já evoluído neste
@@ -318,7 +319,7 @@ firmware**, com o comando `configurar` publicado como `backend`:
 ```bash
 mosquitto_pub -h <IP> -u backend -P <senha> -q 1 \
   -t "garagem/v1/<deviceId>/cmd" \
-  -m '{"v":1,"commandId":"cfg-1","acao":"configurar","limiar_ocupa_cm":10,"limiar_libera_cm":13,"duracao_reserva_min":15}'
+  -m '{"v":1,"commandId":"cfg-1","acao":"configurar","limiar_ocupa_cm":8,"limiar_libera_cm":11,"duracao_reserva_min":15}'
 ```
 
 Regras: `limiar_ocupa_cm` entre 2 e 200; `limiar_libera_cm` maior que
@@ -683,6 +684,26 @@ tag fica salva só no navegador). Na demonstração, o celular precisa estar
 no mesmo Wi-Fi do servidor e alcançar a porta 8001. Ver
 [ADR 0001](docs/adr/0001-rfid-e-app-motorista.md).
 
+**Reservar pelo app** ([ADR 0009](docs/adr/0009-reserva-pelo-app-do-motorista.md)):
+
+1. O administrador cadastra a tag (o painel ainda não tem formulário; use
+   `http://<IP>:8000/docs` → `POST /api/tags`, autenticado):
+
+   ```bash
+   TOKEN=$(curl -s -X POST http://<IP>:8000/api/login -H 'Content-Type: application/json' \
+     -d '{"usuario":"admin","senha":"<ADMIN_SENHA>"}' | jq -r .access_token)
+   curl -X POST http://<IP>:8000/api/tags -H "Authorization: Bearer $TOKEN" \
+     -H 'Content-Type: application/json' -d '{"uid":"04A1B2C3","apelido":"carro de teste"}'
+   ```
+
+2. No celular, o motorista informa o código da tag em **Minha tag**.
+3. Cada vaga livre ganha o botão **Reservar**. O app acompanha o pedido
+   por até 20 s: confirmado, o LED da vaga fica **azul** até o carro
+   chegar ou o prazo (`duracao_reserva_min`) vencer.
+
+Recusas aparecem na tela: tag não cadastrada, vaga não está livre,
+garagem offline ou a tag já tem uma reserva ativa (uma por vez).
+
 ## Adicionar vagas
 
 Cada vaga tem um **número único na garagem**, definido explicitamente
@@ -740,7 +761,10 @@ O projeto pode ser executado sem hardware físico no simulador
 │   │   ├── 0003-firmware-v1-fila-de-eventos.md  # Contrato v1, fila de eventos offline, leitor sob o piso
 │   │   ├── 0004-comandos-reserva-e-nvs.md       # Comandos, reserva com LED azul, configuração em NVS
 │   │   ├── 0005-backend-tres-assinantes.md      # Backend: persistência, operador e motorista
-│   │   └── 0006-mqtt-sem-tls-na-rede-local.md   # Justificativa de não usar TLS no MQTT (R16)
+│   │   ├── 0006-mqtt-sem-tls-na-rede-local.md   # Justificativa de não usar TLS no MQTT (R16)
+│   │   ├── 0007-estado-do-leitor-rfid-na-telemetria.md  # Campo leitor_rfid na telemetria
+│   │   ├── 0008-esp32-atuador-separado-para-os-leds.md  # Não adotada: LEDs num 2º ESP32
+│   │   └── 0009-reserva-pelo-app-do-motorista.md        # Reserva pelo motorista com a tag
 │   ├── fluxograma-firmware.md   # Fluxogramas do firmware e dos subscribers
 │   ├── mapa-de-pinos.md         # Ligações do ESP32
 │   ├── CP12.md                  # Requisitos (R1–R18) e proposta da N3
